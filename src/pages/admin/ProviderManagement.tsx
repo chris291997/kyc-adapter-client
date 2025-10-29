@@ -4,13 +4,12 @@ import { apiClient } from '../../services/apiClient'
 import { API_ENDPOINTS } from '../../constants'
 import Card, { CardContent, CardHeader, CardTitle } from '../../components/ui/Card'
 import Button from '../../components/ui/Button'
-import Table, { TableBody, TableCell, TableHead, TableHeader, TableRow } from '../../components/ui/Table'
 import Badge from '../../components/ui/Badge'
 import LoadingSpinner from '../../components/ui/LoadingSpinner'
 import Modal, { ModalActions } from '../../components/ui/Modal'
 import Input from '../../components/ui/Input'
 import EmptyState from '../../components/ui/EmptyState'
-import { Plus, Shield, Copy, Key, RefreshCw, Eye, Edit, Trash2, PlusCircle, EyeOff, CheckCircle, XCircle } from 'lucide-react'
+import { Plus, Shield, Copy, RefreshCw, Eye, Edit, Trash2, PlusCircle, EyeOff, CheckCircle, XCircle } from 'lucide-react'
 import { formatDate } from '../../utils/format'
 import { generateHMACSecret, copyToClipboard } from '../../utils/crypto'
 import type { Provider, UpdateProviderRequest } from '../../types'
@@ -18,9 +17,6 @@ import type { Provider, UpdateProviderRequest } from '../../types'
 export default function ProviderManagement() {
   const queryClient = useQueryClient()
   const [selectedProvider, setSelectedProvider] = useState<Provider | null>(null)
-  const [showSecretModal, setShowSecretModal] = useState(false)
-  const [newSecret, setNewSecret] = useState('')
-  const [showRotateConfirm, setShowRotateConfirm] = useState(false)
   const [showViewModal, setShowViewModal] = useState(false)
   const [showEditModal, setShowEditModal] = useState(false)
   const [showCreateModal, setShowCreateModal] = useState(false)
@@ -98,7 +94,6 @@ export default function ProviderManagement() {
 
   const handleGenerateWebhookSecret = (isCreate = false) => {
     const secret = generateHMACSecret(32)
-    setNewSecret(secret)
     if (isCreate) {
       setCreateFormData({ ...createFormData, webhook_secret: secret })
     } else {
@@ -854,7 +849,7 @@ export default function ProviderManagement() {
                 <Button
                   size="sm"
                   variant="primary"
-                  onClick={handleGenerateWebhookSecret}
+                  onClick={() => handleGenerateWebhookSecret(false)}
                   icon={<RefreshCw className="h-4 w-4" />}
                 >
                   Generate

@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { apiClient } from '../../services/apiClient'
 import { API_ENDPOINTS } from '../../constants'

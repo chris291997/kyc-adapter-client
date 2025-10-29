@@ -4,7 +4,7 @@ import Button from '../../components/ui/Button'
 import Badge from '../../components/ui/Badge'
 import { ArrowLeft, Copy } from 'lucide-react'
 import { formatDate } from '../../utils/format'
-import type { VerificationInitiateResponse, Verification } from '../../types'
+import type { VerificationInitiateResponse, Verification, VerificationStatus, VerificationType } from '../../types'
 import { websocketService } from '../../services/websocketService'
 import { useEffect, useState } from 'react'
 
@@ -12,7 +12,7 @@ export default function ValidationPage() {
   const { tenantId, verificationId } = useParams<{ tenantId: string; verificationId: string }>()
   const navigate = useNavigate()
   const location = useLocation()
-  const [apiResponse, setApiResponse] = useState<VerificationInitiateResponse | null>(
+  const [apiResponse] = useState<VerificationInitiateResponse | null>(
     location.state?.response || null
   )
   const [verificationStatus, setVerificationStatus] = useState<string>('')
@@ -26,17 +26,16 @@ export default function ValidationPage() {
 
     const unsubscribe = websocketService.subscribeToVerification(verificationId, (data) => {
       console.log('Verification update received:', data)
-      const status = data.status || data.verificationStatus || ''
+      const status = data.status || ''
       setVerificationStatus(status)
       
       // Update verification state with WebSocket data
       setVerification({
         id: verificationId,
-        status: status,
-        verificationType: data.verificationType || apiResponse?.verificationType || 'document',
-        createdAt: data.createdAt || data.created_at || new Date().toISOString(),
+        status: status as VerificationStatus,
+        verificationType: 'document' as VerificationType, // Default, as WebSocket doesn't provide this
         updatedAt: data.updatedAt || data.updated_at || new Date().toISOString(),
-        result: data.result || data.verificationResult,
+        result: data.result,
       } as Verification)
     })
 
@@ -55,16 +54,16 @@ export default function ValidationPage() {
     const normalizedStatus = status.toLowerCase()
     
     if (normalizedStatus.includes('approved') || normalizedStatus === 'approved') {
-      return <Badge variant="success">Approved</Badge>
+      return <Badge variant="approved">Approved</Badge>
     }
     if (normalizedStatus.includes('rejected') || normalizedStatus === 'rejected') {
-      return <Badge variant="danger">Rejected</Badge>
+      return <Badge variant="rejected">Rejected</Badge>
     }
     if (normalizedStatus.includes('pending') || normalizedStatus === 'pending') {
-      return <Badge variant="warning">Pending</Badge>
+      return <Badge variant="pending">Pending</Badge>
     }
     if (normalizedStatus.includes('processing') || normalizedStatus === 'processing') {
-      return <Badge variant="info">Processing</Badge>
+      return <Badge variant="processing">Processing</Badge>
     }
     return <Badge>{status}</Badge>
   }
@@ -80,12 +79,10 @@ export default function ValidationPage() {
   }
 
   // If we don't have apiResponse but have verificationId, construct a basic response
-  const displayResponse = apiResponse || (verificationId ? {
+  const displayResponse: VerificationInitiateResponse | null = apiResponse || (verificationId ? {
     verificationId: verificationId,
     verification_id: verificationId,
-    status: verification?.status || 'pending',
-    verificationType: verification?.verificationType || 'document',
-    result: verification?.result,
+    status: (verification?.status || 'pending') as VerificationStatus,
   } : null)
 
   return (
@@ -156,7 +153,7 @@ export default function ValidationPage() {
                   </label>
                   {getStatusBadge(displayResponse.status)}
                 </div>
-                {displayResponse.sessionUrl || displayResponse.session_url ? (
+                {displayResponse && (displayResponse.sessionUrl || displayResponse.session_url) ? (
                   <div className="md:col-span-2">
                     <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">
                       Session URL
@@ -213,7 +210,7 @@ export default function ValidationPage() {
                 <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">
                   Status
                 </label>
-                {getStatusBadge(verification.status || verification.verificationStatus)}
+                {getStatusBadge(verification.status)}
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">

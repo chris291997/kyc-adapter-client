@@ -23,24 +23,6 @@ const copyToClipboard = (text: string) => {
   alert('Copied to clipboard!')
 }
 
-interface TenantStats {
-  users: {
-    total: number
-    admins: number
-    regularUsers: number
-  }
-  verifications: {
-    total: number
-    pending: number
-    approved: number
-    rejected: number
-  }
-  quota: {
-    used: number
-    limit: number
-    percentage: number
-  }
-}
 
 export default function TenantDetails() {
   const { tenantId } = useParams<{ tenantId: string }>()
@@ -232,9 +214,6 @@ export default function TenantDetails() {
     )
   }
 
-  const quotaPercentage = tenant.quota_limit > 0 
-    ? Math.round((tenant.quota_used / tenant.quota_limit) * 100) 
-    : 0
 
   return (
     <div className="space-y-6">

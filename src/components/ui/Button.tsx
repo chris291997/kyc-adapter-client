@@ -2,7 +2,7 @@ import { ButtonHTMLAttributes, ReactNode } from 'react'
 import { cn } from '../../utils/cn'
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
-  children: ReactNode
+  children?: ReactNode
   variant?: 'primary' | 'secondary' | 'danger' | 'ghost' | 'outline'
   size?: 'sm' | 'md' | 'lg'
   loading?: boolean
@@ -63,7 +63,7 @@ export default function Button({
           />
         </svg>
       )}
-      {icon && !loading && <span className="mr-2">{icon}</span>}
+      {icon && !loading && <span className={children ? "mr-2" : ""}>{icon}</span>}
       {children}
     </button>
   )

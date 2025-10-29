@@ -33,13 +33,21 @@ export default function UsersManagement() {
   const [showEditModal, setShowEditModal] = useState(false)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [editFormData, setEditFormData] = useState<Partial<User>>({})
-  const [createFormData, setCreateFormData] = useState({
+  const [createFormData, setCreateFormData] = useState<{
+    firstName: string
+    lastName: string
+    phone: string
+    email: string
+    password: string
+    userType: UserType
+    tenantId: string
+  }>({
     firstName: '',
     lastName: '',
     phone: '',
     email: '',
     password: '',
-    userType: 'tenant_admin' as UserType,
+    userType: 'tenant_admin',
     tenantId: '',
   })
 
@@ -110,7 +118,7 @@ export default function UsersManagement() {
     setEditFormData({
       name: user.name,
       email: user.email,
-      userType: user.userType || user.user_type,
+      userType: (user.userType || user.user_type) as UserType,
     })
     setShowEditModal(true)
   }
@@ -725,7 +733,7 @@ export default function UsersManagement() {
                 value={createFormData.tenantId}
                 onChange={(e) => setCreateFormData({ ...createFormData, tenantId: e.target.value })}
                 className="w-full px-3 py-2 border rounded-lg text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600 focus:outline-none focus:ring-2 focus:ring-primary-500"
-                required={createFormData.userType !== 'super_admin'}
+                required={true}
               >
                 <option value="">Select a tenant</option>
                 {tenants.map((tenant) => (

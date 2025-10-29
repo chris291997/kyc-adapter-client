@@ -22,6 +22,7 @@ interface PhilsysLivenessResponse {
     error?: boolean
     message?: string
   }
+  message?: string
 }
 
 // Extend window object to include IDmeta Philsys Liveness SDK
@@ -325,34 +326,63 @@ export default function ValidationPage() {
     
     // Handle the SDK promise
     sdkPromise.then((data) => {
-      
-      const sessionId = data.result?.session_id
-      
-      // Handle SDK error or missing session id
-      if (data?.result?.error || !sessionId) {
-        const sdkMsg = data?.result?.message || 'Face liveness failed. Session ID not returned.'
+      try {
+        // Validate response structure
+        if (!data || typeof data !== 'object') {
+          throw new Error('Invalid SDK response format')
+        }
+
+        // Check for error in response
+        if (data.status === 'error' || data.result?.error) {
+          const sdkMsg = data.result?.message || data.message || 'Face liveness failed'
+          setPhilsysResponse(data)
+          setPhilsysError(sdkMsg)
+          setIsPhilsysTesting(false)
+          setShowSDKWarning(false)
+          return
+        }
+
+        // Validate session ID exists
+        const sessionId = data.result?.session_id
+        if (!sessionId) {
+          const errorMsg = data.result?.message || 'Face liveness session ID not returned. Session may have exited unexpectedly.'
+          setPhilsysResponse(data)
+          setPhilsysError(errorMsg)
+          setIsPhilsysTesting(false)
+          setShowSDKWarning(false)
+          return
+        }
+        
+        // Success - store the response
         setPhilsysResponse(data)
-        setPhilsysError(sdkMsg)
         setIsPhilsysTesting(false)
         setShowSDKWarning(false)
-        return
+      } catch (parseError: any) {
+        // Handle JSON parsing or validation errors
+        const errorMsg = parseError?.message || 'Unable to parse SDK response data'
+        console.error('SDK response parsing error:', parseError, 'Response:', data)
+        setPhilsysError(`${errorMsg}. The face liveness session may have exited.`)
+        setPhilsysResponse(data || null)
+        setIsPhilsysTesting(false)
+        setShowSDKWarning(false)
       }
-      
-      // Store the response
-      setPhilsysResponse(data)
-      setIsPhilsysTesting(false)
-      setShowSDKWarning(false)
     }).catch((error: any) => {
+      console.error('SDK execution error:', error)
       
       let errorMsg = error?.message || 'Face liveness check failed'
       const errName = (error as any)?.name || ''
       
-      if (errName === 'NotAllowedError') {
+      // Check for parsing errors in error message
+      if (errorMsg.includes('parse') || errorMsg.includes('JSON') || errorMsg.includes('Unable to parse')) {
+        errorMsg = 'Unable to parse SDK response data. The face liveness session may have exited unexpectedly. Please try again.'
+      } else if (errName === 'NotAllowedError') {
         errorMsg = 'Camera permission denied. Please allow camera access and try again.'
       } else if (errName === 'NotFoundError') {
         errorMsg = 'No camera device found.'
       } else if (errName === 'SecurityError') {
         errorMsg = 'Camera blocked due to insecure context. Use HTTPS or localhost.'
+      } else if (errorMsg.includes('exited') || errorMsg.includes('session')) {
+        errorMsg = `Face liveness session ended: ${errorMsg}`
       }
       
       setPhilsysError(errorMsg)

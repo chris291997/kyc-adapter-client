@@ -317,3 +317,16 @@ export interface DocumentVerificationResponse {
   status: 'pending' | 'processing' | 'approved' | 'rejected'
 }
 
+// Template/Plan Types
+export interface TemplateMapping {
+  id: number
+  name: string
+  workflow_id: string
+  dropzone_plans: number[]
+}
+
+export interface PlanMapping {
+  id: number
+  plan: string
+}
+

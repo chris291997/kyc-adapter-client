@@ -8,11 +8,30 @@ import LoadingSpinner from '../../components/ui/LoadingSpinner'
 import { CheckCircle, TrendingUp, AlertCircle, Play } from 'lucide-react'
 import type { TenantDashboardStats, VerificationInitiateResponse } from '../../types'
 import { useAppSelector } from '../../hooks/useRedux'
+import { useEffect, useMemo, useState } from 'react'
+import { TEMPLATES, PLAN_ID_TO_CARDS } from '../../constants/templates'
 
 export default function TenantDashboard() {
   const navigate = useNavigate()
   const { user } = useAppSelector((state) => state.auth)
   const tenantId = user?.tenantId || user?.tenant_id
+
+  // Template selection (must occur before initiate)
+  const [selectedTemplateId, setSelectedTemplateId] = useState<number>(() => {
+    const saved = localStorage.getItem('tenant_dash_selected_template')
+    return saved ? Number(saved) : 425
+  })
+
+  useEffect(() => {
+    localStorage.setItem('tenant_dash_selected_template', String(selectedTemplateId))
+  }, [selectedTemplateId])
+
+  const allowedCards = useMemo(() => {
+    const tpl = TEMPLATES.find(t => t.id === selectedTemplateId)
+    if (!tpl) return new Set<string>()
+    const cards = tpl.dropzone_plans.flatMap((pid) => PLAN_ID_TO_CARDS[pid] || [])
+    return new Set(cards)
+  }, [selectedTemplateId])
 
   const { data: stats, isLoading, error } = useQuery<TenantDashboardStats>({
     queryKey: ['tenant-dashboard'],
@@ -24,7 +43,7 @@ export default function TenantDashboard() {
   const initiateVerificationMutation = useMutation({
     mutationFn: () =>
       apiClient.post<VerificationInitiateResponse>(API_ENDPOINTS.VERIFICATIONS_INITIATE, {
-        templateId: '425',
+        templateId: String(selectedTemplateId),
         userEmail: user?.email || 'test@example.com',
         metadata: {
           testMode: true,
@@ -35,7 +54,7 @@ export default function TenantDashboard() {
       if (verificationId && tenantId) {
         // Navigate to validation page with verification ID
         navigate(`/tenant/validation/${verificationId}`, {
-          state: { response },
+          state: { response, selectedTemplateId },
         })
       }
     },
@@ -77,14 +96,31 @@ export default function TenantDashboard() {
             Overview of your verification activities
           </p>
         </div>
-        <Button
-          variant="primary"
-          onClick={() => initiateVerificationMutation.mutate()}
-          icon={<Play className="h-5 w-5" />}
-          loading={initiateVerificationMutation.isPending}
-        >
-          Test Verification
-        </Button>
+        <div className="flex items-center gap-3">
+          <div>
+            <label className="block text-xs font-medium text-gray-600 dark:text-gray-300 mb-1">Template</label>
+            <select
+              value={selectedTemplateId}
+              onChange={(e) => setSelectedTemplateId(Number(e.target.value))}
+              className="px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              {TEMPLATES.map(t => (
+                <option key={t.id} value={t.id}>{t.name} (ID: {t.id})</option>
+              ))}
+            </select>
+            <div className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+              Steps: {Array.from(allowedCards).join(', ') || 'None'}
+            </div>
+          </div>
+          <Button
+            variant="primary"
+            onClick={() => initiateVerificationMutation.mutate()}
+            icon={<Play className="h-5 w-5" />}
+            loading={initiateVerificationMutation.isPending}
+          >
+            Start Verification
+          </Button>
+        </div>
       </div>
 
       {/* Quota Usage */}

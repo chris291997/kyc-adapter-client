@@ -12,7 +12,8 @@ import { verificationService } from '../../services/verificationService'
 import type { DocumentVerificationRequest, DocumentVerificationResponse } from '../../types'
 import { apiClient } from '../../services/apiClient'
 import { API_ENDPOINTS } from '../../constants'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { TEMPLATES, PLAN_ID_TO_CARDS } from '../../constants/templates'
 
 // Type for Philsys Face Liveness SDK Response
 interface PhilsysLivenessResponse {
@@ -59,7 +60,14 @@ export default function ValidationPage() {
   // PhilSys submit states
   const [pcn, setPcn] = useState('')
   const [isSubmittingPhilsys, setIsSubmittingPhilsys] = useState(false)
-  const TEMPLATE_ID = '425'
+  // Template selection (drives which verification cards render)
+  const [selectedTemplateId, setSelectedTemplateId] = useState<number>(() => {
+    const fromState = (location.state as any)?.selectedTemplateId as number | undefined
+    if (fromState) return fromState
+    if (!verificationId) return 425
+    const saved = localStorage.getItem(`selected_template_${verificationId}`)
+    return saved ? Number(saved) : 425
+  })
   // Persisted last submission result
   const [lastPhilsysSubmission, setLastPhilsysSubmission] = useState<{
     pcn: string
@@ -77,6 +85,19 @@ export default function ValidationPage() {
   const [lastDocResponse, setLastDocResponse] = useState<DocumentVerificationResponse | null>(null)
 
   const MAX_IMAGE_BYTES = 10 * 1024 * 1024 // ~10MB
+
+  // Keep doc templateId aligned with selected template
+  useEffect(() => {
+    setDocTemplateId(String(selectedTemplateId || ''))
+  }, [selectedTemplateId])
+
+  // Persist template selection per verification
+  useEffect(() => {
+    if (!verificationId) return
+    localStorage.setItem(`selected_template_${verificationId}`, String(selectedTemplateId))
+  }, [verificationId, selectedTemplateId])
+
+  // allowedCards moved below useQuery to avoid TDZ with verificationData
 
   const fileToDataUrl = (file: File): Promise<string> => {
     return new Promise((resolve, reject) => {
@@ -175,6 +196,47 @@ export default function ValidationPage() {
   const externalIdFromData = verificationData?.external_verification_id
   const externalIdFromInit = apiResponse?.external_verification_id || verification?.external_verification_id
   const externalIdMismatch = !!(externalIdFromData && externalIdFromInit && externalIdFromData !== externalIdFromInit)
+
+  // Compute which cards to render based on backend response plans when available
+  const allowedCards = useMemo(() => {
+    const planIdsFromResponse: number[] = (() => {
+      const prov = (verificationData as any)?.provider_response
+      const providerPlans = prov?.providerData?.plans || (prov?.fullResponse?.plans) || (verificationData as any)?.providerData?.plans || (verificationData as any)?.plans
+      if (Array.isArray(providerPlans) && providerPlans.length > 0) {
+        return providerPlans.map((p: any) => Number(p.id)).filter((n: any) => !Number.isNaN(n))
+      }
+      const drop = prov?.providerData?.dropzone_plans || prov?.dropzone_plans || (verificationData as any)?.dropzone_plans
+      if (typeof drop === 'string') {
+        try {
+          const arr = JSON.parse(drop)
+          if (Array.isArray(arr)) return arr.map((x) => Number(x))
+        } catch {
+          // ignore invalid JSON in dropzone_plans
+          console.log('Not importing dropzone_plans');
+        }
+      }
+      return []
+    })()
+
+    const planIds = planIdsFromResponse.length > 0
+      ? planIdsFromResponse
+      : (TEMPLATES.find(t => t.id === selectedTemplateId)?.dropzone_plans || [])
+
+    const cards = planIds.flatMap((pid) => PLAN_ID_TO_CARDS[pid] || [])
+    return new Set(cards)
+  }, [verificationData, selectedTemplateId])
+
+  const showPhilsys = allowedCards.has('philsys_liveness')
+  const showDocument = allowedCards.has('document_verification')
+
+  // Template name for display
+  const templateName = useMemo(() => {
+    const prov = (verificationData as any)?.provider_response
+    const name = prov?.providerData?.template?.name || prov?.fullResponse?.template?.name
+    if (typeof name === 'string' && name.trim()) return name
+    const tpl = TEMPLATES.find(t => t.id === selectedTemplateId)
+    return tpl?.name || 'N/A'
+  }, [verificationData, selectedTemplateId])
 
   // Subscribe to WebSocket updates
   useEffect(() => {
@@ -287,6 +349,19 @@ export default function ValidationPage() {
     }
   }, [verificationData, verification])
 
+  // Derive templateId from backend response when available
+  useEffect(() => {
+    if (!verificationId) return
+    const prov = (verificationData as any)?.provider_response
+    const tplFromProv = prov?.providerData?.template?.id || prov?.fullResponse?.template?.id
+    const tplFromVerification = (verificationData as any)?.verification?.template_id || (verificationData as any)?.template_id
+    const derived = Number(tplFromProv || tplFromVerification)
+    if (!Number.isNaN(derived) && derived) {
+      setSelectedTemplateId(derived)
+      localStorage.setItem(`selected_template_${verificationId}`, String(derived))
+    }
+  }, [verificationData, verificationId])
+
   // If initiated without external_verification_id, attempt to fetch it shortly after mount
   useEffect(() => {
     if (!verificationId) return
@@ -373,20 +448,49 @@ export default function ValidationPage() {
     requestCameraPermission()
   }, [])
 
+
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text)
     alert('Copied to clipboard!')
   }
 
   const handlePhilsysLivenessCheck = () => {
+    // Always reset SDK/session-related UI state before every request
+    const resetPhilsysSessionState = () => {
+      try {
+        setPhilsysResponse(null)
+        setPhilsysError(null)
+        setIsPhilsysTesting(false)
+        setShowSDKWarning(false)
+        // Clear any previous guard state if present
+        const prevRef = (handlePhilsysLivenessCheck as any)._runningRef
+        if (prevRef && typeof prevRef === 'object') {
+          prevRef.current = false
+        }
+        // Clear any SDK load failure marker
+        if (typeof window !== 'undefined') {
+          window._idmetaSDKLoadFailed = false
+        }
+      } catch {
+        // ignore reset errors
+      }
+    }
+
+    resetPhilsysSessionState()
+    // Prevent multiple simultaneous starts (which can cause instant close)
+    const runningRef = (handlePhilsysLivenessCheck as any)._runningRef || ((handlePhilsysLivenessCheck as any)._runningRef = { current: false })
+    if (runningRef.current) return
+    runningRef.current = true
     // Block if we detect an external_verification_id mismatch
     if (externalIdMismatch) {
       setPhilsysError('External verification ID mismatch detected. Please refresh and ensure you use the verification opened on this page.')
+      runningRef.current = false
       return
     }
       // Check if SDK is loaded
       if (!window.IDmetaPhilsysLiveness) {
       setPhilsysError('IDmeta Philsys Liveness SDK not loaded. Please refresh the page.')
+      runningRef.current = false
       return
     }
 
@@ -394,6 +498,7 @@ export default function ValidationPage() {
     const API_KEY = import.meta.env.VITE_IDMETA_API_KEY
     if (!API_KEY) {
       setPhilsysError('IDmeta API key not configured. Please check your environment variables.')
+      runningRef.current = false
       return
     }
     
@@ -403,41 +508,75 @@ export default function ValidationPage() {
     if (!externalVerificationId) {
       setPhilsysError('No external_verification_id returned from backend.')
       setIsPhilsysTesting(false)
+      runningRef.current = false
       return
     }
       
-    const sdkInstance = window.IDmetaPhilsysLiveness()
-    
-    // Verify .start() method exists
-    if (typeof sdkInstance?.start !== 'function') {
-      setPhilsysError('SDK start method not found.')
-      setIsPhilsysTesting(false)
-      return
-    }
-    
-    // Call SDK with external verification ID
-    const sdkPromise = sdkInstance.start({
-      verificationId: String(externalVerificationId),
-      token: String(API_KEY)
-    })
-    
-    // Set loading state after initiating SDK to preserve user gesture timing
-    setIsPhilsysTesting(true)
-    setPhilsysError(null)
-    
-    setShowSDKWarning(true)
-    
-    // Handle the SDK promise
-    sdkPromise.then((data) => {
+    // Preflight: attempt camera access and immediately release to avoid stale lock between runs
+    // This also surfaces permission errors before invoking the SDK
+    const preflight = async () => {
       try {
-        // Validate response structure
-        if (!data || typeof data !== 'object') {
-          throw new Error('Invalid SDK response format')
+        if (navigator.mediaDevices?.getUserMedia) {
+          const s = await navigator.mediaDevices.getUserMedia({ video: true })
+          s.getTracks().forEach(t => t.stop())
         }
+      } catch (e: any) {
+        const errName = e?.name || ''
+        if (errName === 'NotAllowedError') {
+          setPhilsysError('Camera permission denied. Please allow camera access and try again.')
+        } else if (errName === 'NotFoundError') {
+          setPhilsysError('No camera device found.')
+        } else if (errName === 'NotReadableError') {
+          setPhilsysError('Camera is in use by another application. Close it and try again.')
+        } else if (errName === 'OverconstrainedError') {
+          setPhilsysError('Camera constraints cannot be satisfied by any available device.')
+        } else if (errName === 'SecurityError') {
+          setPhilsysError('Camera blocked due to insecure context. Use HTTPS or localhost.')
+        } else {
+          setPhilsysError(e?.message || 'Unable to access camera.')
+        }
+        runningRef.current = false
+        throw e
+      }
+    }
 
-        // Check for error in response
-        if (data.status === 'error' || data.result?.error) {
-          const sdkMsg = data.result?.message || data.message || 'Face liveness failed'
+    // Kick off SDK after preflight completes
+    const startSDK = async () => {
+      const sdkInstance = window.IDmetaPhilsysLiveness!()
+    
+      // Verify .start() method exists
+      if (typeof sdkInstance?.start !== 'function') {
+        setPhilsysError('SDK start method not found.')
+        setIsPhilsysTesting(false)
+        runningRef.current = false
+        return
+      }
+      
+      // Sanitize parameters and call SDK with external verification ID
+      const verificationIdForSDK = String(externalVerificationId).trim()
+      const tokenForSDK = String(API_KEY).trim()
+      if (!verificationIdForSDK || !tokenForSDK) {
+        setPhilsysError('Invalid SDK parameters. Missing verificationId or token.')
+        runningRef.current = false
+        return
+      }
+      const sdkPromise = sdkInstance.start({
+        verificationId: verificationIdForSDK,
+        token: tokenForSDK,
+      })
+      
+      // Set loading state after initiating SDK to preserve user gesture timing
+      setIsPhilsysTesting(true)
+      setPhilsysError(null)
+      setPhilsysResponse(null)
+      
+      setShowSDKWarning(true)
+      
+      // Handle the SDK promise
+      sdkPromise.then((data) => {
+        // Prefer provider message if present
+        if (data?.status === 'error' || data?.result?.error) {
+          const sdkMsg = data?.result?.message || data?.message || 'Face liveness failed'
           setPhilsysResponse(data)
           setPhilsysError(sdkMsg)
           setIsPhilsysTesting(false)
@@ -445,53 +584,55 @@ export default function ValidationPage() {
           return
         }
 
-        // Validate session ID exists
-          const sessionId = data.result?.session_id
+        const sessionId = data?.result?.session_id
         if (!sessionId) {
-          const errorMsg = data.result?.message || 'Face liveness session ID not returned. Session may have exited unexpectedly.'
+          const errorMsg = data?.result?.message || data?.message || 'Face liveness session ID not returned.'
           setPhilsysResponse(data)
           setPhilsysError(errorMsg)
           setIsPhilsysTesting(false)
           setShowSDKWarning(false)
           return
         }
-        
-        // Success - store the response
+
         setPhilsysResponse(data)
         setIsPhilsysTesting(false)
         setShowSDKWarning(false)
-      } catch (parseError: any) {
-        // Handle JSON parsing or validation errors
-        const errorMsg = parseError?.message || 'Unable to parse SDK response data'
-        console.error('SDK response parsing error:', parseError, 'Response:', data)
-        setPhilsysError(`${errorMsg}. The face liveness session may have exited.`)
-        setPhilsysResponse(data || null)
+      }).catch((error: any) => {
+        console.error('SDK execution error:', error)
+        
+        let errorMsg = error?.message || 'Face liveness check failed'
+        const errName = (error as any)?.name || ''
+        
+        // Check for parsing errors in error message
+        if (errorMsg.includes('parse') || errorMsg.includes('JSON') || errorMsg.includes('Unable to parse')) {
+          errorMsg = 'Face liveness session may have exited unexpectedly. Please try again.'
+        } else if (errName === 'NotAllowedError') {
+          errorMsg = 'Camera permission denied. Please allow camera access and try again.'
+        } else if (errName === 'NotFoundError') {
+          errorMsg = 'No camera device found.'
+        } else if (errName === 'SecurityError') {
+          errorMsg = 'Camera blocked due to insecure context. Use HTTPS or localhost.'
+        } else if (errName === 'NotReadableError') {
+          errorMsg = 'Camera is in use by another application. Close it and try again.'
+        } else if (errorMsg.includes('exited') || errorMsg.includes('session')) {
+          errorMsg = `Face liveness session ended: ${errorMsg}`
+        }
+        
+        setPhilsysError(errorMsg)
         setIsPhilsysTesting(false)
         setShowSDKWarning(false)
-      }
-    }).catch((error: any) => {
-      console.error('SDK execution error:', error)
-      
-          let errorMsg = error?.message || 'Face liveness check failed'
-      const errName = (error as any)?.name || ''
-      
-      // Check for parsing errors in error message
-      if (errorMsg.includes('parse') || errorMsg.includes('JSON') || errorMsg.includes('Unable to parse')) {
-        errorMsg = 'Unable to parse SDK response data. The face liveness session may have exited unexpectedly. Please try again.'
-      } else if (errName === 'NotAllowedError') {
-        errorMsg = 'Camera permission denied. Please allow camera access and try again.'
-      } else if (errName === 'NotFoundError') {
-        errorMsg = 'No camera device found.'
-      } else if (errName === 'SecurityError') {
-        errorMsg = 'Camera blocked due to insecure context. Use HTTPS or localhost.'
-      } else if (errorMsg.includes('exited') || errorMsg.includes('session')) {
-        errorMsg = `Face liveness session ended: ${errorMsg}`
-          }
-          
-          setPhilsysError(errorMsg)
-          setIsPhilsysTesting(false)
-          setShowSDKWarning(false)
-        })
+      }).finally(() => {
+        runningRef.current = false
+      })
+      // Ensure guard resets if then path completed
+      sdkPromise.finally?.(() => {
+        runningRef.current = false
+      })
+    }
+
+    preflight().then(startSDK).catch(() => {
+      // preflight already set error and reset flag
+    })
   }
 
   // Submit to PH PhilSys (PCN)
@@ -517,7 +658,7 @@ export default function ValidationPage() {
       const payload = {
         pcn: pcnDigits,
         faceLivenessSessionId: philsysResponse.result.session_id as string,
-        templateId: TEMPLATE_ID,
+        templateId: String(selectedTemplateId),
         verificationId: verificationId as string,
       }
       const resp = await apiClient.post<{ id: string; status: string }>(API_ENDPOINTS.PH_PHILSYS_PCN, payload)
@@ -776,7 +917,7 @@ export default function ValidationPage() {
                   Verification Type
                 </label>
                 <p className="text-sm text-gray-900 dark:text-gray-100">
-                  {verification.verificationType || 'N/A'}
+                  {templateName}
                 </p>
               </div>
               {(verification.external_verification_id || verificationData?.external_verification_id) && (
@@ -848,6 +989,19 @@ export default function ValidationPage() {
                   </p>
                 </div>
               ) : null}
+              <div className="md:col-span-2">
+                <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">
+                  Verification Steps
+                </label>
+                <div className="text-xs text-gray-700 dark:text-gray-300 space-x-2">
+                  {Array.from(allowedCards).map((c) => (
+                    <span key={c} className="inline-flex items-center rounded-md bg-gray-100 dark:bg-gray-800 px-2 py-0.5">{c}</span>
+                  ))}
+                  {allowedCards.size === 0 && (
+                    <span className="text-gray-500">None</span>
+                  )}
+                </div>
+              </div>
             </div>
 
             {/* Verification Result (if available) */}
@@ -865,7 +1019,10 @@ export default function ValidationPage() {
         </Card>
       )}
 
+      {/* Included Steps moved into Current Verification Status */}
+
       {/* Philsys Face Liveness Test */}
+      {showPhilsys && (
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center justify-between">
@@ -1207,8 +1364,10 @@ export default function ValidationPage() {
           </div>
         </CardContent>
       </Card>
+      )}
 
       {/* Document Verification */}
+      {showDocument && (
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center justify-between">
@@ -1224,15 +1383,11 @@ export default function ValidationPage() {
           <div className="space-y-4">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="md:col-span-1">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">templateId</label>
-                <input
-                  type="text"
-                  value={docTemplateId}
-                  onChange={(e) => setDocTemplateId(e.target.value)}
-                  placeholder="e.g. your_template_id"
-                  className="w-full px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Required</p>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Template</label>
+                <div className="text-sm text-gray-900 dark:text-gray-100">
+                  ID {selectedTemplateId}
+                </div>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Used as templateId for submission</p>
               </div>
 
               <div>
@@ -1308,6 +1463,7 @@ export default function ValidationPage() {
           </div>
         </CardContent>
       </Card>
+      )}
 
     </div>
   )

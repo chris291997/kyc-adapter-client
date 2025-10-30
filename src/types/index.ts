@@ -305,3 +305,15 @@ export interface ApiError {
   timestamp?: string
 }
 
+// Document Verification
+export interface DocumentVerificationRequest {
+  templateId: string
+  imageFrontSide: string // data URL base64 with prefix
+  imageBackSide?: string // optional data URL base64 with prefix
+}
+
+export interface DocumentVerificationResponse {
+  id: string
+  status: 'pending' | 'processing' | 'approved' | 'rejected'
+}
+

@@ -9,6 +9,8 @@ const getProxyTarget = () => {
   // If VITE_ENV is 'test', use Replit backend URL
   if (process.env.VITE_ENV === 'test') {
     return 'https://d58a3b08-335a-460b-b4c9-241ca526d77d-00-2bhyhl0y9qi5s.sisko.replit.dev:3000'
+  } else {
+    return 'http://127.0.0.1:3000'
   }
   // Check for explicit proxy target
   if (process.env.VITE_PROXY_TARGET) {

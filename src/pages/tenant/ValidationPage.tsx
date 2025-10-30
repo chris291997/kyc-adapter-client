@@ -8,6 +8,8 @@ import { ArrowLeft, Copy, Eye } from 'lucide-react'
 import { formatDate } from '../../utils/format'
 import type { VerificationInitiateResponse, Verification } from '../../types'
 import { websocketService } from '../../services/websocketService'
+import { verificationService } from '../../services/verificationService'
+import type { DocumentVerificationRequest, DocumentVerificationResponse } from '../../types'
 import { apiClient } from '../../services/apiClient'
 import { API_ENDPOINTS } from '../../constants'
 import { useEffect, useState } from 'react'
@@ -66,6 +68,100 @@ export default function ValidationPage() {
     timestamp: string
   } | null>(null)
 
+  // Document Verification states
+  const [docTemplateId, setDocTemplateId] = useState('')
+  const [docFrontDataUrl, setDocFrontDataUrl] = useState<string>('')
+  const [docBackDataUrl, setDocBackDataUrl] = useState<string>('')
+  const [docError, setDocError] = useState<string | null>(null)
+  const [isSubmittingDoc, setIsSubmittingDoc] = useState(false)
+  const [lastDocResponse, setLastDocResponse] = useState<DocumentVerificationResponse | null>(null)
+
+  const MAX_IMAGE_BYTES = 10 * 1024 * 1024 // ~10MB
+
+  const fileToDataUrl = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(String(reader.result))
+      reader.onerror = (e) => reject(e)
+      reader.readAsDataURL(file)
+    })
+  }
+
+  const validateImageFile = (file: File): string | null => {
+    const isSupported = ['image/jpeg', 'image/png'].includes(file.type)
+    if (!isSupported) return 'Unsupported image type. Use JPG or PNG.'
+    if (file.size > MAX_IMAGE_BYTES) return 'Image is too large. Max size is ~10MB.'
+    return null
+  }
+
+  const handlePickFront = async (file?: File) => {
+    if (!file) return
+    const err = validateImageFile(file)
+    if (err) {
+      setDocError(err)
+      return
+    }
+    const dataUrl = await fileToDataUrl(file)
+    setDocFrontDataUrl(dataUrl)
+    setDocError(null)
+  }
+
+  const handlePickBack = async (file?: File) => {
+    if (!file) return
+    const err = validateImageFile(file)
+    if (err) {
+      setDocError(err)
+      return
+    }
+    const dataUrl = await fileToDataUrl(file)
+    setDocBackDataUrl(dataUrl)
+    setDocError(null)
+  }
+
+  const handleSubmitDocument = async () => {
+    if (!verificationId) {
+      setDocError('Missing verificationId.')
+      return
+    }
+    if (!docTemplateId.trim()) {
+      setDocError('templateId is required.')
+      return
+    }
+    if (!docFrontDataUrl) {
+      setDocError('Front image is required.')
+      return
+    }
+
+    setIsSubmittingDoc(true)
+    setDocError(null)
+    try {
+      const payload: DocumentVerificationRequest = {
+        templateId: docTemplateId.trim(),
+        imageFrontSide: docFrontDataUrl,
+        imageBackSide: docBackDataUrl || undefined,
+      }
+      const resp = await verificationService.submitDocument(verificationId, payload)
+      setLastDocResponse(resp)
+      if (resp?.status) {
+        setVerificationStatus(resp.status)
+        setVerification((prev) => (prev ? { ...prev, status: resp.status } as any : prev))
+      }
+      if (refetchVerification) {
+        await refetchVerification()
+      }
+    } catch (e: any) {
+      if (e?.statusCode === 400) {
+        setDocError(e?.message || 'Invalid request. Check images and templateId.')
+      } else if (e?.statusCode === 401 || e?.statusCode === 403) {
+        setDocError('Authentication failed. Please login or set API key.')
+      } else {
+        setDocError(e?.message || 'Failed to submit document verification.')
+      }
+    } finally {
+      setIsSubmittingDoc(false)
+    }
+  }
+
   // Load verification data if not provided via location state
   const { data: verificationData, isLoading: isLoadingVerification, refetch: refetchVerification } = useQuery<Verification>({
     queryKey: ['verification', verificationId],
@@ -74,6 +170,11 @@ export default function ValidationPage() {
     // or the initiate response is missing external_verification_id
     enabled: !!verificationId && (!apiResponse || !apiResponse.external_verification_id),
   })
+
+  // Detect external_verification_id mismatch between initiated response and fetched verification
+  const externalIdFromData = verificationData?.external_verification_id
+  const externalIdFromInit = apiResponse?.external_verification_id || verification?.external_verification_id
+  const externalIdMismatch = !!(externalIdFromData && externalIdFromInit && externalIdFromData !== externalIdFromInit)
 
   // Subscribe to WebSocket updates
   useEffect(() => {
@@ -174,7 +275,7 @@ export default function ValidationPage() {
       }
       if (unsubscribeExternal) {
         unsubscribeExternal()
-      }
+    }
     }
   }, [verificationId, apiResponse, verificationData, verification, refetchVerification])
 
@@ -278,8 +379,13 @@ export default function ValidationPage() {
   }
 
   const handlePhilsysLivenessCheck = () => {
-    // Check if SDK is loaded
-    if (!window.IDmetaPhilsysLiveness) {
+    // Block if we detect an external_verification_id mismatch
+    if (externalIdMismatch) {
+      setPhilsysError('External verification ID mismatch detected. Please refresh and ensure you use the verification opened on this page.')
+      return
+    }
+      // Check if SDK is loaded
+      if (!window.IDmetaPhilsysLiveness) {
       setPhilsysError('IDmeta Philsys Liveness SDK not loaded. Please refresh the page.')
       return
     }
@@ -291,15 +397,8 @@ export default function ValidationPage() {
       return
     }
     
-    // Set loading state
-    setIsPhilsysTesting(true)
-    setPhilsysError(null)
-      
-    // Get external_verification_id from backend response (always present based on your backend API)
-    const externalVerificationId = 
-      apiResponse?.external_verification_id ||
-      verification?.external_verification_id ||
-      verificationData?.external_verification_id
+    // Use external_verification_id strictly from fetched verification to avoid mismatches
+    const externalVerificationId = verificationData?.external_verification_id
       
     if (!externalVerificationId) {
       setPhilsysError('No external_verification_id returned from backend.')
@@ -322,6 +421,10 @@ export default function ValidationPage() {
       token: String(API_KEY)
     })
     
+    // Set loading state after initiating SDK to preserve user gesture timing
+    setIsPhilsysTesting(true)
+    setPhilsysError(null)
+    
     setShowSDKWarning(true)
     
     // Handle the SDK promise
@@ -343,7 +446,7 @@ export default function ValidationPage() {
         }
 
         // Validate session ID exists
-        const sessionId = data.result?.session_id
+          const sessionId = data.result?.session_id
         if (!sessionId) {
           const errorMsg = data.result?.message || 'Face liveness session ID not returned. Session may have exited unexpectedly.'
           setPhilsysResponse(data)
@@ -369,7 +472,7 @@ export default function ValidationPage() {
     }).catch((error: any) => {
       console.error('SDK execution error:', error)
       
-      let errorMsg = error?.message || 'Face liveness check failed'
+          let errorMsg = error?.message || 'Face liveness check failed'
       const errName = (error as any)?.name || ''
       
       // Check for parsing errors in error message
@@ -383,12 +486,12 @@ export default function ValidationPage() {
         errorMsg = 'Camera blocked due to insecure context. Use HTTPS or localhost.'
       } else if (errorMsg.includes('exited') || errorMsg.includes('session')) {
         errorMsg = `Face liveness session ended: ${errorMsg}`
-      }
-      
-      setPhilsysError(errorMsg)
-      setIsPhilsysTesting(false)
-      setShowSDKWarning(false)
-    })
+          }
+          
+          setPhilsysError(errorMsg)
+          setIsPhilsysTesting(false)
+          setShowSDKWarning(false)
+        })
   }
 
   // Submit to PH PhilSys (PCN)
@@ -805,15 +908,22 @@ export default function ValidationPage() {
                   <strong>External Verification ID:</strong> <code>{apiResponse?.external_verification_id || verification?.external_verification_id || verificationData?.external_verification_id}</code>
                 </p>
               )}
+              {externalIdMismatch && (
+                <div className="mt-2 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded p-2">
+                  <p className="text-xs text-yellow-700 dark:text-yellow-300">
+                    ⚠️ Detected mismatching external_verification_id between the initiated response and the fetched verification. The SDK will be blocked to prevent invalid sessions.
+                  </p>
+                </div>
+              )}
             </div>
 
-            {!(apiResponse?.external_verification_id || verification?.external_verification_id || verificationData?.external_verification_id) && (
+            {!verificationData?.external_verification_id && (
               <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg p-3 mb-4">
                 <p className="text-sm text-yellow-700 dark:text-yellow-300">
                   ⚠️ <strong>Missing External Verification ID</strong>
                 </p>
                 <p className="text-xs text-yellow-700 dark:text-yellow-300 mt-1">
-                  The backend did not return <code>external_verification_id</code>. Face liveness check is disabled.
+                  The backend did not return <code>external_verification_id</code> in fetched verification data. Face liveness check is disabled until details load.
                 </p>
               </div>
             )}
@@ -824,7 +934,8 @@ export default function ValidationPage() {
               disabled={
                 isPhilsysTesting || 
                 !sdkLoaded || 
-                !(apiResponse?.external_verification_id || verification?.external_verification_id || verificationData?.external_verification_id)
+                !verificationData?.external_verification_id ||
+                externalIdMismatch
               }
               icon={<Eye className="h-4 w-4" />}
             >
@@ -916,59 +1027,59 @@ export default function ValidationPage() {
                     </ul>
                   </div>
                 ) : (
-                  <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4">
-                    <p className="text-sm text-green-600 dark:text-green-400 font-medium mb-2">
-                      ✅ Face Liveness Check Completed Successfully!
-                    </p>
-                    <p className="text-xs text-green-700 dark:text-green-300 mt-1">
-                      The face biometric data has been captured. Session ID is ready for backend integration.
-                    </p>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
-                      <div>
-                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
-                          Status
-                        </label>
-                        <p className="text-sm text-gray-900 dark:text-gray-100">
-                          {philsysResponse.status || 'N/A'}
-                        </p>
-                      </div>
-                      <div>
-                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
-                          Session ID
-                        </label>
-                        <p className="text-sm font-mono text-gray-900 dark:text-gray-100 break-all">
-                          {philsysResponse.result?.session_id || 'N/A'}
-                        </p>
-                      </div>
-                      {philsysResponse.result?.photo && (
-                        <div className="md:col-span-2">
-                          <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">
-                            Captured Photo
-                          </label>
-                          <img 
-                            src={philsysResponse.result.photo} 
-                            alt="Face liveness capture" 
-                            className="w-48 h-48 object-cover rounded-lg border border-gray-300 dark:border-gray-600"
-                          />
-                        </div>
-                      )}
-                      {philsysResponse.result?.photo_url && (
-                        <div className="md:col-span-2">
-                          <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
-                            Photo URL
-                          </label>
-                          <a 
-                            href={philsysResponse.result.photo_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-sm text-blue-600 dark:text-blue-400 hover:underline break-all"
-                          >
-                            {philsysResponse.result.photo_url}
-                          </a>
-                        </div>
-                      )}
+                <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800 rounded-lg p-4">
+                  <p className="text-sm text-green-600 dark:text-green-400 font-medium mb-2">
+                    ✅ Face Liveness Check Completed Successfully!
+                  </p>
+                  <p className="text-xs text-green-700 dark:text-green-300 mt-1">
+                    The face biometric data has been captured. Session ID is ready for backend integration.
+                  </p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Status
+                      </label>
+                      <p className="text-sm text-gray-900 dark:text-gray-100">
+                        {philsysResponse.status || 'N/A'}
+                      </p>
                     </div>
+                    <div>
+                      <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Session ID
+                      </label>
+                      <p className="text-sm font-mono text-gray-900 dark:text-gray-100 break-all">
+                        {philsysResponse.result?.session_id || 'N/A'}
+                      </p>
+                    </div>
+                    {philsysResponse.result?.photo && (
+                      <div className="md:col-span-2">
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">
+                          Captured Photo
+                        </label>
+                        <img 
+                          src={philsysResponse.result.photo} 
+                          alt="Face liveness capture" 
+                          className="w-48 h-48 object-cover rounded-lg border border-gray-300 dark:border-gray-600"
+                        />
+                      </div>
+                    )}
+                    {philsysResponse.result?.photo_url && (
+                      <div className="md:col-span-2">
+                        <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                          Photo URL
+                        </label>
+                        <a 
+                          href={philsysResponse.result.photo_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-sm text-blue-600 dark:text-blue-400 hover:underline break-all"
+                        >
+                          {philsysResponse.result.photo_url}
+                        </a>
+                      </div>
+                    )}
                   </div>
+                </div>
                 )}
 
                 <div>
@@ -1013,7 +1124,7 @@ export default function ValidationPage() {
                 <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                   Requires face liveness session and a valid 16-digit PCN.
                 </p>
-              </div>
+                </div>
 
                 {/* Backend API Payload Information */}
                 <div className="mt-4 p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
@@ -1067,7 +1178,7 @@ export default function ValidationPage() {
                 </div>
               </div>
             )}
-            </div>
+          </div>
 
             {/* Side panel: Last PhilSys Submission (persisted) */}
             <div className="space-y-4">
@@ -1093,6 +1204,107 @@ export default function ValidationPage() {
                 </div>
               )}
             </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Document Verification */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <span>Document Verification</span>
+            {lastDocResponse && (
+              <span className="text-xs text-gray-600 dark:text-gray-400">
+                Last status: {lastDocResponse.status}
+              </span>
+            )}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="md:col-span-1">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">templateId</label>
+                <input
+                  type="text"
+                  value={docTemplateId}
+                  onChange={(e) => setDocTemplateId(e.target.value)}
+                  placeholder="e.g. your_template_id"
+                  className="w-full px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Required</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Front Image (JPG/PNG, ≤10MB)</label>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png"
+                  onChange={(e) => handlePickFront(e.target.files?.[0])}
+                  className="block w-full text-sm text-gray-900 dark:text-gray-100 file:mr-4 file:py-2 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 dark:file:bg-blue-900/30 dark:file:text-blue-300"
+                />
+                {docFrontDataUrl && (
+                  <img src={docFrontDataUrl} alt="Front preview" className="mt-2 h-24 rounded border border-gray-200 dark:border-gray-700 object-cover" />
+                )}
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Back Image (optional)</label>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png"
+                  onChange={(e) => handlePickBack(e.target.files?.[0])}
+                  className="block w-full text-sm text-gray-900 dark:text-gray-100 file:mr-4 file:py-2 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 dark:file:bg-blue-900/30 dark:file:text-blue-300"
+                />
+                {docBackDataUrl && (
+                  <img src={docBackDataUrl} alt="Back preview" className="mt-2 h-24 rounded border border-gray-200 dark:border-gray-700 object-cover" />
+                )}
+              </div>
+            </div>
+
+            {docError && (
+              <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3 text-sm text-red-700 dark:text-red-300">
+                {docError}
+              </div>
+            )}
+
+            <div className="flex items-center gap-2">
+              <Button
+                variant="primary"
+                onClick={handleSubmitDocument}
+                disabled={isSubmittingDoc}
+              >
+                {isSubmittingDoc ? 'Submitting…' : 'Submit Document'}
+              </Button>
+              <Button
+                variant="ghost"
+                onClick={async () => {
+                  if (!verificationId) return
+                  try {
+                    const s = await verificationService.getStatus(verificationId)
+                    setLastDocResponse(s)
+                    if (s?.status) {
+                      setVerificationStatus(s.status)
+                      setVerification((prev) => (prev ? { ...prev, status: s.status } as any : prev))
+                    }
+                  } catch (e) {
+                    // ignore for quick refresh
+                  }
+                }}
+              >
+                Refresh Status
+              </Button>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                Auth handled automatically (Bearer or X-API-Key). Do not send provider verification_id.
+              </p>
+            </div>
+
+            {lastDocResponse && (
+              <div className="text-xs text-gray-600 dark:text-gray-300">
+                <div><span className="font-medium">Response ID:</span> <span className="font-mono">{lastDocResponse.id}</span></div>
+                <div className="mt-1"><span className="font-medium">Status:</span> {getStatusBadge(lastDocResponse.status)}</div>
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>

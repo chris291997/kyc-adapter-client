@@ -455,28 +455,6 @@ export default function ValidationPage() {
   }
 
   const handlePhilsysLivenessCheck = () => {
-    // Always reset SDK/session-related UI state before every request
-    const resetPhilsysSessionState = () => {
-      try {
-        setPhilsysResponse(null)
-        setPhilsysError(null)
-        setIsPhilsysTesting(false)
-        setShowSDKWarning(false)
-        // Clear any previous guard state if present
-        const prevRef = (handlePhilsysLivenessCheck as any)._runningRef
-        if (prevRef && typeof prevRef === 'object') {
-          prevRef.current = false
-        }
-        // Clear any SDK load failure marker
-        if (typeof window !== 'undefined') {
-          window._idmetaSDKLoadFailed = false
-        }
-      } catch {
-        // ignore reset errors
-      }
-    }
-
-    resetPhilsysSessionState()
     // Prevent multiple simultaneous starts (which can cause instant close)
     const runningRef = (handlePhilsysLivenessCheck as any)._runningRef || ((handlePhilsysLivenessCheck as any)._runningRef = { current: false })
     if (runningRef.current) return
@@ -512,9 +490,57 @@ export default function ValidationPage() {
       return
     }
       
+    // Helper: forcefully stop all active camera tracks
+    const stopAllCameraTracks = async () => {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices()
+        const videoDev = devices.filter(d => d.kind === 'videoinput')
+        if (videoDev.length > 0 && navigator.mediaDevices?.getUserMedia) {
+          // Attempt to get and immediately stop a stream to release any lingering locks
+          try {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: true })
+            stream.getTracks().forEach(track => {
+              track.stop()
+              console.log('Stopped camera track:', track.id)
+            })
+          } catch { void 0 }
+        }
+      } catch { void 0 }
+    }
+
+    // Helper: reload the SDK script and wait until it re-attaches to window
+    const reloadIdmetaSDK = async (): Promise<void> => {
+      try {
+        const sdkSrc = 'https://web-sdk.idmetagroup.com/js/idmeta-philsys-sdk.min.js'
+        const scripts = Array.from(document.getElementsByTagName('script'))
+        const existing = scripts.find(s => (s.getAttribute('src') || '').includes('idmeta-philsys-sdk.min.js'))
+        if (existing && existing.parentElement) {
+          existing.parentElement.removeChild(existing)
+        }
+        await new Promise<void>((resolve, reject) => {
+          const el = document.createElement('script')
+          el.src = sdkSrc
+          el.async = true
+          el.onload = () => resolve()
+          el.onerror = () => reject(new Error('Failed to reload IDmeta SDK'))
+          document.head.appendChild(el)
+        })
+        // Wait for global attach
+        const start = Date.now()
+        while (!window.IDmetaPhilsysLiveness && Date.now() - start < 5000) {
+          await new Promise(r => setTimeout(r, 100))
+        }
+      } catch {
+        // swallow, caller will surface a friendly error
+      }
+    }
+
     // Preflight: attempt camera access and immediately release to avoid stale lock between runs
     // This also surfaces permission errors before invoking the SDK
     const preflight = async () => {
+      // First, stop any lingering tracks from previous run
+      await stopAllCameraTracks()
+      
       try {
         if (navigator.mediaDevices?.getUserMedia) {
           const s = await navigator.mediaDevices.getUserMedia({ video: true })
@@ -572,6 +598,84 @@ export default function ValidationPage() {
       
       setShowSDKWarning(true)
       
+      let didRetry = false
+      const tryReloadAndRetry = async (reason?: string) => {
+        if (didRetry) return
+        didRetry = true
+        // Best-effort stop any tracks
+        try {
+          if (navigator.mediaDevices?.getUserMedia) {
+            const s = await navigator.mediaDevices.getUserMedia({ video: true })
+            s.getTracks().forEach(t => t.stop())
+          }
+        } catch { void 0 }
+        await reloadIdmetaSDK()
+        if (!window.IDmetaPhilsysLiveness) {
+          setPhilsysError(reason || 'Unable to initialize camera. Please refresh the page.')
+          setIsPhilsysTesting(false)
+          setShowSDKWarning(false)
+          return
+        }
+        // Retry once
+        const retryInstance = window.IDmetaPhilsysLiveness()
+        if (typeof retryInstance?.start !== 'function') {
+          setPhilsysError('SDK start method not found after reload.')
+          setIsPhilsysTesting(false)
+          setShowSDKWarning(false)
+          return
+        }
+        const retryPromise = retryInstance.start({
+          verificationId: verificationIdForSDK,
+          token: tokenForSDK,
+        })
+        retryPromise.then((data) => {
+          if (data?.status === 'error' || data?.result?.error) {
+            const sdkMsg = data?.result?.message || data?.message || 'Face liveness failed'
+            setPhilsysResponse(data)
+            setPhilsysError(sdkMsg)
+            setIsPhilsysTesting(false)
+            setShowSDKWarning(false)
+            return
+          }
+          const sessionId = data?.result?.session_id
+          if (!sessionId) {
+            const errorMsg = data?.result?.message || data?.message || 'Face liveness session ID not returned.'
+            setPhilsysResponse(data)
+            setPhilsysError(errorMsg)
+            setIsPhilsysTesting(false)
+            setShowSDKWarning(false)
+            return
+          }
+          setPhilsysResponse(data)
+          setIsPhilsysTesting(false)
+          setShowSDKWarning(false)
+        }).catch((error: any) => {
+          let errorMsg = error?.message || 'Face liveness check failed'
+          const errName = (error as any)?.name || ''
+          if (errorMsg.includes('parse') || errorMsg.includes('JSON') || errorMsg.includes('Unable to parse')) {
+            errorMsg = 'Face liveness session may have exited unexpectedly. Please try again.'
+          } else if (errName === 'NotAllowedError') {
+            errorMsg = 'Camera permission denied. Please allow camera access and try again.'
+          } else if (errName === 'NotFoundError') {
+            errorMsg = 'No camera device found.'
+          } else if (errName === 'SecurityError') {
+            errorMsg = 'Camera blocked due to insecure context. Use HTTPS or localhost.'
+          } else if (errName === 'NotReadableError') {
+            errorMsg = 'Camera is in use by another application. Close it and try again.'
+          } else if (errorMsg.includes('exited') || errorMsg.includes('session')) {
+            errorMsg = `Face liveness session ended: ${errorMsg}`
+          }
+          setPhilsysError(errorMsg)
+          setIsPhilsysTesting(false)
+          setShowSDKWarning(false)
+        })
+        .finally(async () => {
+          // Always stop camera tracks when retry completes
+          await stopAllCameraTracks()
+          runningRef.current = false
+        })
+      }
+
       // Handle the SDK promise
       sdkPromise.then((data) => {
         // Prefer provider message if present
@@ -613,7 +717,9 @@ export default function ValidationPage() {
         } else if (errName === 'SecurityError') {
           errorMsg = 'Camera blocked due to insecure context. Use HTTPS or localhost.'
         } else if (errName === 'NotReadableError') {
-          errorMsg = 'Camera is in use by another application. Close it and try again.'
+          // Retry once with a full SDK reload which can clear previous camera handles
+          tryReloadAndRetry('Camera is in use by another application. Close it and try again.')
+          return
         } else if (errorMsg.includes('exited') || errorMsg.includes('session')) {
           errorMsg = `Face liveness session ended: ${errorMsg}`
         }
@@ -621,11 +727,9 @@ export default function ValidationPage() {
         setPhilsysError(errorMsg)
         setIsPhilsysTesting(false)
         setShowSDKWarning(false)
-      }).finally(() => {
-        runningRef.current = false
-      })
-      // Ensure guard resets if then path completed
-      sdkPromise.finally?.(() => {
+      }).finally(async () => {
+        // Always stop camera tracks when SDK completes (success, error, or cancel)
+        await stopAllCameraTracks()
         runningRef.current = false
       })
     }

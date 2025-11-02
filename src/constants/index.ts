@@ -39,6 +39,9 @@ export const VERIFICATION_TYPES = {
   DOCUMENT: 'document',
   BIOMETRIC: 'biometric',
   ADDRESS: 'address',
+  GOVERNMENT_DATA: 'government_data',
+  COMPLIANCE: 'compliance', // For biometrics endpoints
+  CUSTOMIZE: 'customize', // For custom document endpoints
 } as const
 
 // Verification Status
@@ -116,5 +119,17 @@ export const API_ENDPOINTS = {
   VERIFICATIONS: '/verifications',
   // PH PhilSys (PCN) - no /api/v1 prefix (API_BASE_URL already points to base)
   PH_PHILSYS_PCN: '/verifications/philippines/philsys/pcn',
+  // PH Government Data Verification Endpoints
+  PH_LTO_DRIVERS_LICENSE: '/verifications/philippines/lto/drivers-license',
+  PH_NATIONAL_POLICE: '/verifications/philippines/national-police',
+  PH_NBI: '/verifications/philippines/nbi',
+  PH_PRC: '/verifications/philippines/prc',
+  PH_SSS: '/verifications/philippines/sss',
+  // Biometrics Verification Endpoints
+  BIOMETRICS_FACE_MATCH: '/verifications/biometrics/face-match',
+  BIOMETRICS_REGISTRATION: '/verifications/biometrics/registration',
+  BIOMETRICS_VERIFICATION: '/verifications/biometrics/verification',
+  // Custom Document Verification
+  CUSTOM_DOCUMENT: '/verifications/custom/document',
 } as const
 

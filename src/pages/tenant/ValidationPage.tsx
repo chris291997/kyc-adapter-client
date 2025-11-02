@@ -9,7 +9,26 @@ import { formatDate } from '../../utils/format'
 import type { VerificationInitiateResponse, Verification } from '../../types'
 import { websocketService } from '../../services/websocketService'
 import { verificationService } from '../../services/verificationService'
-import type { DocumentVerificationRequest, DocumentVerificationResponse } from '../../types'
+import type { 
+  DocumentVerificationRequest, 
+  DocumentVerificationResponse,
+  BiometricsFaceMatchRequest,
+  BiometricsFaceMatchResponse,
+  BiometricsRegistrationRequest,
+  BiometricsRegistrationResponse,
+  BiometricVerificationRequest,
+  BiometricVerificationResponse,
+  CustomDocumentVerificationRequest,
+  CustomDocumentVerificationResponse,
+  PhLtoDriversLicenseRequest,
+  PhNationalPoliceRequest,
+  PhNbiRequest,
+  PhPrcRequest,
+  PhPrcRequestByLicense,
+  PhPrcRequestByName,
+  PhSssRequest,
+  GovernmentDataVerificationResponse,
+} from '../../types'
 import { apiClient } from '../../services/apiClient'
 import { API_ENDPOINTS } from '../../constants'
 import { useEffect, useMemo, useState } from 'react'
@@ -83,6 +102,60 @@ export default function ValidationPage() {
   const [docError, setDocError] = useState<string | null>(null)
   const [isSubmittingDoc, setIsSubmittingDoc] = useState(false)
   const [lastDocResponse, setLastDocResponse] = useState<DocumentVerificationResponse | null>(null)
+
+  // Biometrics Verification states
+  const [biometricVerificationImageUrl, setBiometricVerificationImageUrl] = useState<string>('')
+  const [biometricRegistrationImageUrl, setBiometricRegistrationImageUrl] = useState<string>('')
+  const [biometricUsername, setBiometricUsername] = useState('')
+  const [biometricError, setBiometricError] = useState<string | null>(null)
+  const [isSubmittingBiometric, setIsSubmittingBiometric] = useState(false)
+  const [biometricVerificationResponse, setBiometricVerificationResponse] = useState<BiometricVerificationResponse | null>(null)
+  const [biometricRegistrationResponse, setBiometricRegistrationResponse] = useState<BiometricsRegistrationResponse | null>(null)
+
+  // Biometrics Face Match states
+  const [faceMatchImage1Url, setFaceMatchImage1Url] = useState<string>('')
+  const [faceMatchImage2Url, setFaceMatchImage2Url] = useState<string>('')
+  const [faceMatchError, setFaceMatchError] = useState<string | null>(null)
+  const [isSubmittingFaceMatch, setIsSubmittingFaceMatch] = useState(false)
+  const [faceMatchResponse, setFaceMatchResponse] = useState<BiometricsFaceMatchResponse | null>(null)
+
+  // Custom Document Verification states
+  const [customDocImageUrl, setCustomDocImageUrl] = useState<string>('')
+  const [customDocError, setCustomDocError] = useState<string | null>(null)
+  const [isSubmittingCustomDoc, setIsSubmittingCustomDoc] = useState(false)
+  const [customDocResponse, setCustomDocResponse] = useState<CustomDocumentVerificationResponse | null>(null)
+
+  // PH Government Data Verification states
+  const [phLtoLicenseNo, setPhLtoLicenseNo] = useState('')
+  const [phLtoError, setPhLtoError] = useState<string | null>(null)
+  const [isSubmittingPhLto, setIsSubmittingPhLto] = useState(false)
+  const [phLtoResponse, setPhLtoResponse] = useState<GovernmentDataVerificationResponse | null>(null)
+
+  const [phNationalPoliceSurname, setPhNationalPoliceSurname] = useState('')
+  const [phNationalPoliceClearanceNo, setPhNationalPoliceClearanceNo] = useState('')
+  const [phNationalPoliceError, setPhNationalPoliceError] = useState<string | null>(null)
+  const [isSubmittingPhNationalPolice, setIsSubmittingPhNationalPolice] = useState(false)
+  const [phNationalPoliceResponse, setPhNationalPoliceResponse] = useState<GovernmentDataVerificationResponse | null>(null)
+
+  const [phNbiClearanceNo, setPhNbiClearanceNo] = useState('')
+  const [phNbiError, setPhNbiError] = useState<string | null>(null)
+  const [isSubmittingPhNbi, setIsSubmittingPhNbi] = useState(false)
+  const [phNbiResponse, setPhNbiResponse] = useState<GovernmentDataVerificationResponse | null>(null)
+
+  const [phPrcProfession, setPhPrcProfession] = useState('')
+  const [phPrcLicenseNo, setPhPrcLicenseNo] = useState('')
+  const [phPrcDateOfBirth, setPhPrcDateOfBirth] = useState('')
+  const [phPrcFirstName, setPhPrcFirstName] = useState('')
+  const [phPrcLastName, setPhPrcLastName] = useState('')
+  const [phPrcSearchBy, setPhPrcSearchBy] = useState<'license' | 'name'>('license')
+  const [phPrcError, setPhPrcError] = useState<string | null>(null)
+  const [isSubmittingPhPrc, setIsSubmittingPhPrc] = useState(false)
+  const [phPrcResponse, setPhPrcResponse] = useState<GovernmentDataVerificationResponse | null>(null)
+
+  const [phSssNumber, setPhSssNumber] = useState('')
+  const [phSssError, setPhSssError] = useState<string | null>(null)
+  const [isSubmittingPhSss, setIsSubmittingPhSss] = useState(false)
+  const [phSssResponse, setPhSssResponse] = useState<GovernmentDataVerificationResponse | null>(null)
 
   const MAX_IMAGE_BYTES = 10 * 1024 * 1024 // ~10MB
 
@@ -183,6 +256,353 @@ export default function ValidationPage() {
     }
   }
 
+  // Biometrics Verification Handler
+  const handleBiometricVerification = async () => {
+    if (!verificationId) {
+      setBiometricError('Missing verificationId.')
+      return
+    }
+    if (!biometricVerificationImageUrl) {
+      setBiometricError('Image is required.')
+      return
+    }
+
+    setIsSubmittingBiometric(true)
+    setBiometricError(null)
+    try {
+      const payload: BiometricVerificationRequest = {
+        verificationId,
+        templateId: String(selectedTemplateId),
+        image: biometricVerificationImageUrl,
+      }
+      const resp = await apiClient.post<BiometricVerificationResponse>(API_ENDPOINTS.BIOMETRICS_VERIFICATION, payload)
+      setBiometricVerificationResponse(resp)
+      if (resp?.status) {
+        setVerificationStatus(resp.status)
+        setVerification((prev) => (prev ? { ...prev, status: resp.status } as any : prev))
+      }
+      if (refetchVerification) {
+        await refetchVerification()
+      }
+    } catch (e: any) {
+      setBiometricError(e?.message || 'Failed to submit biometric verification.')
+    } finally {
+      setIsSubmittingBiometric(false)
+    }
+  }
+
+  // Biometrics Registration Handler
+  const handleBiometricRegistration = async () => {
+    if (!verificationId) {
+      setBiometricError('Missing verificationId.')
+      return
+    }
+    if (!biometricUsername.trim()) {
+      setBiometricError('Username is required.')
+      return
+    }
+    if (!biometricRegistrationImageUrl) {
+      setBiometricError('Image is required.')
+      return
+    }
+
+    setIsSubmittingBiometric(true)
+    setBiometricError(null)
+    try {
+      const payload: BiometricsRegistrationRequest = {
+        verificationId,
+        templateId: String(selectedTemplateId),
+        username: biometricUsername.trim(),
+        image: biometricRegistrationImageUrl,
+      }
+      const resp = await apiClient.post<BiometricsRegistrationResponse>(API_ENDPOINTS.BIOMETRICS_REGISTRATION, payload)
+      setBiometricRegistrationResponse(resp)
+      if (resp?.status) {
+        setVerificationStatus(resp.status)
+        setVerification((prev) => (prev ? { ...prev, status: resp.status } as any : prev))
+      }
+      if (refetchVerification) {
+        await refetchVerification()
+      }
+    } catch (e: any) {
+      setBiometricError(e?.message || 'Failed to submit biometric registration.')
+    } finally {
+      setIsSubmittingBiometric(false)
+    }
+  }
+
+  // Biometrics Face Match Handler
+  const handleFaceMatch = async () => {
+    if (!verificationId) {
+      setFaceMatchError('Missing verificationId.')
+      return
+    }
+    if (!faceMatchImage1Url || !faceMatchImage2Url) {
+      setFaceMatchError('Both images are required.')
+      return
+    }
+
+    setIsSubmittingFaceMatch(true)
+    setFaceMatchError(null)
+    try {
+      const payload: BiometricsFaceMatchRequest = {
+        verificationId,
+        templateId: String(selectedTemplateId),
+        image1: faceMatchImage1Url,
+        image2: faceMatchImage2Url,
+      }
+      const resp = await apiClient.post<BiometricsFaceMatchResponse>(API_ENDPOINTS.BIOMETRICS_FACE_MATCH, payload)
+      setFaceMatchResponse(resp)
+      if (resp?.status) {
+        setVerificationStatus(resp.status)
+        setVerification((prev) => (prev ? { ...prev, status: resp.status } as any : prev))
+      }
+      if (refetchVerification) {
+        await refetchVerification()
+      }
+    } catch (e: any) {
+      setFaceMatchError(e?.message || 'Failed to submit face match.')
+    } finally {
+      setIsSubmittingFaceMatch(false)
+    }
+  }
+
+  // Custom Document Verification Handler
+  const handleCustomDocument = async () => {
+    if (!verificationId) {
+      setCustomDocError('Missing verificationId.')
+      return
+    }
+
+    setIsSubmittingCustomDoc(true)
+    setCustomDocError(null)
+    try {
+      const payload: CustomDocumentVerificationRequest = {
+        verificationId,
+        templateId: String(selectedTemplateId),
+        document: customDocImageUrl || undefined,
+      }
+      const resp = await apiClient.post<CustomDocumentVerificationResponse>(API_ENDPOINTS.CUSTOM_DOCUMENT, payload)
+      setCustomDocResponse(resp)
+      if (resp?.status) {
+        setVerificationStatus(resp.status)
+        setVerification((prev) => (prev ? { ...prev, status: resp.status } as any : prev))
+      }
+      if (refetchVerification) {
+        await refetchVerification()
+      }
+    } catch (e: any) {
+      setCustomDocError(e?.message || 'Failed to submit custom document.')
+    } finally {
+      setIsSubmittingCustomDoc(false)
+    }
+  }
+
+  // PH LTO Drivers License Handler
+  const handlePhLto = async () => {
+    if (!verificationId) {
+      setPhLtoError('Missing verificationId.')
+      return
+    }
+    if (!phLtoLicenseNo.trim()) {
+      setPhLtoError('License number is required.')
+      return
+    }
+
+    setIsSubmittingPhLto(true)
+    setPhLtoError(null)
+    try {
+      const payload: PhLtoDriversLicenseRequest = {
+        verificationId,
+        templateId: String(selectedTemplateId),
+        licenseNo: phLtoLicenseNo.trim(),
+      }
+      const resp = await apiClient.post<GovernmentDataVerificationResponse>(API_ENDPOINTS.PH_LTO_DRIVERS_LICENSE, payload)
+      setPhLtoResponse(resp)
+      if (resp?.status) {
+        setVerificationStatus(resp.status)
+        setVerification((prev) => (prev ? { ...prev, status: resp.status } as any : prev))
+      }
+      if (refetchVerification) {
+        await refetchVerification()
+      }
+    } catch (e: any) {
+      setPhLtoError(e?.message || 'Failed to submit PH LTO verification.')
+    } finally {
+      setIsSubmittingPhLto(false)
+    }
+  }
+
+  // PH National Police Handler
+  const handlePhNationalPolice = async () => {
+    if (!verificationId) {
+      setPhNationalPoliceError('Missing verificationId.')
+      return
+    }
+    if (!phNationalPoliceSurname.trim()) {
+      setPhNationalPoliceError('Surname is required.')
+      return
+    }
+    if (!phNationalPoliceClearanceNo.trim()) {
+      setPhNationalPoliceError('Clearance number is required.')
+      return
+    }
+
+    setIsSubmittingPhNationalPolice(true)
+    setPhNationalPoliceError(null)
+    try {
+      const payload: PhNationalPoliceRequest = {
+        verificationId,
+        templateId: String(selectedTemplateId),
+        surname: phNationalPoliceSurname.trim(),
+        clearanceNo: phNationalPoliceClearanceNo.trim(),
+      }
+      const resp = await apiClient.post<GovernmentDataVerificationResponse>(API_ENDPOINTS.PH_NATIONAL_POLICE, payload)
+      setPhNationalPoliceResponse(resp)
+      if (resp?.status) {
+        setVerificationStatus(resp.status)
+        setVerification((prev) => (prev ? { ...prev, status: resp.status } as any : prev))
+      }
+      if (refetchVerification) {
+        await refetchVerification()
+      }
+    } catch (e: any) {
+      setPhNationalPoliceError(e?.message || 'Failed to submit PH National Police verification.')
+    } finally {
+      setIsSubmittingPhNationalPolice(false)
+    }
+  }
+
+  // PH NBI Handler
+  const handlePhNbi = async () => {
+    if (!verificationId) {
+      setPhNbiError('Missing verificationId.')
+      return
+    }
+    if (!phNbiClearanceNo.trim()) {
+      setPhNbiError('Clearance number is required.')
+      return
+    }
+
+    setIsSubmittingPhNbi(true)
+    setPhNbiError(null)
+    try {
+      const payload: PhNbiRequest = {
+        verificationId,
+        templateId: String(selectedTemplateId),
+        clearanceNo: phNbiClearanceNo.trim(),
+      }
+      const resp = await apiClient.post<GovernmentDataVerificationResponse>(API_ENDPOINTS.PH_NBI, payload)
+      setPhNbiResponse(resp)
+      if (resp?.status) {
+        setVerificationStatus(resp.status)
+        setVerification((prev) => (prev ? { ...prev, status: resp.status } as any : prev))
+      }
+      if (refetchVerification) {
+        await refetchVerification()
+      }
+    } catch (e: any) {
+      setPhNbiError(e?.message || 'Failed to submit PH NBI verification.')
+    } finally {
+      setIsSubmittingPhNbi(false)
+    }
+  }
+
+  // PH PRC Handler
+  const handlePhPrc = async () => {
+    if (!verificationId) {
+      setPhPrcError('Missing verificationId.')
+      return
+    }
+    if (!phPrcProfession.trim()) {
+      setPhPrcError('Profession is required.')
+      return
+    }
+
+    if (phPrcSearchBy === 'license') {
+      if (!phPrcLicenseNo.trim() || !phPrcDateOfBirth.trim()) {
+        setPhPrcError('License number and date of birth are required.')
+        return
+      }
+    } else {
+      if (!phPrcFirstName.trim() || !phPrcLastName.trim()) {
+        setPhPrcError('First name and last name are required.')
+        return
+      }
+    }
+
+    setIsSubmittingPhPrc(true)
+    setPhPrcError(null)
+    try {
+      let payload: PhPrcRequest
+      if (phPrcSearchBy === 'license') {
+        payload = {
+          verificationId,
+          templateId: String(selectedTemplateId),
+          profession: phPrcProfession.trim(),
+          licenseNo: phPrcLicenseNo.trim(),
+          dateOfBirth: phPrcDateOfBirth.trim(),
+        } as PhPrcRequestByLicense
+      } else {
+        payload = {
+          verificationId,
+          templateId: String(selectedTemplateId),
+          profession: phPrcProfession.trim(),
+          firstName: phPrcFirstName.trim(),
+          lastName: phPrcLastName.trim(),
+        } as PhPrcRequestByName
+      }
+      const resp = await apiClient.post<GovernmentDataVerificationResponse>(API_ENDPOINTS.PH_PRC, payload)
+      setPhPrcResponse(resp)
+      if (resp?.status) {
+        setVerificationStatus(resp.status)
+        setVerification((prev) => (prev ? { ...prev, status: resp.status } as any : prev))
+      }
+      if (refetchVerification) {
+        await refetchVerification()
+      }
+    } catch (e: any) {
+      setPhPrcError(e?.message || 'Failed to submit PH PRC verification.')
+    } finally {
+      setIsSubmittingPhPrc(false)
+    }
+  }
+
+  // PH SSS Handler
+  const handlePhSss = async () => {
+    if (!verificationId) {
+      setPhSssError('Missing verificationId.')
+      return
+    }
+    if (!phSssNumber.trim()) {
+      setPhSssError('SSS number is required.')
+      return
+    }
+
+    setIsSubmittingPhSss(true)
+    setPhSssError(null)
+    try {
+      const payload: PhSssRequest = {
+        verificationId,
+        templateId: String(selectedTemplateId),
+        crnSsNumber: phSssNumber.trim(),
+      }
+      const resp = await apiClient.post<GovernmentDataVerificationResponse>(API_ENDPOINTS.PH_SSS, payload)
+      setPhSssResponse(resp)
+      if (resp?.status) {
+        setVerificationStatus(resp.status)
+        setVerification((prev) => (prev ? { ...prev, status: resp.status } as any : prev))
+      }
+      if (refetchVerification) {
+        await refetchVerification()
+      }
+    } catch (e: any) {
+      setPhSssError(e?.message || 'Failed to submit PH SSS verification.')
+    } finally {
+      setIsSubmittingPhSss(false)
+    }
+  }
+
   // Load verification data if not provided via location state
   const { data: verificationData, isLoading: isLoadingVerification, refetch: refetchVerification } = useQuery<Verification>({
     queryKey: ['verification', verificationId],
@@ -218,16 +638,32 @@ export default function ValidationPage() {
       return []
     })()
 
-    const planIds = planIdsFromResponse.length > 0
+    // Use template plans if no plans from backend response, or if explicitly forcing template-based cards
+    const templatePlans = TEMPLATES.find(t => t.id === selectedTemplateId)?.dropzone_plans || []
+    const planIds = planIdsFromResponse.length > 0 && planIdsFromResponse.some(p => PLAN_ID_TO_CARDS[p]?.length > 0)
       ? planIdsFromResponse
-      : (TEMPLATES.find(t => t.id === selectedTemplateId)?.dropzone_plans || [])
+      : templatePlans
+
+    // Debug logging
+    if (planIds.length === 0 && templatePlans.length > 0) {
+      console.log('[ValidationPage] No cards found for template:', selectedTemplateId, 'plans:', templatePlans)
+    }
 
     const cards = planIds.flatMap((pid) => PLAN_ID_TO_CARDS[pid] || [])
+    console.log('[ValidationPage] Allowed cards:', Array.from(cards), 'from planIds:', planIds, 'templateId:', selectedTemplateId)
     return new Set(cards)
   }, [verificationData, selectedTemplateId])
 
   const showPhilsys = allowedCards.has('philsys_liveness')
   const showDocument = allowedCards.has('document_verification')
+  const showBiometricsVerification = allowedCards.has('biometrics_verification')
+  const showBiometricsFaceCompare = allowedCards.has('biometrics_face_compare')
+  const showCustomDocument = allowedCards.has('custom_document')
+  const showPhLto = allowedCards.has('ph_lto_drivers_license')
+  const showPhPrc = allowedCards.has('ph_prc')
+  const showPhNationalPolice = allowedCards.has('ph_national_police')
+  const showPhNbi = allowedCards.has('ph_nbi')
+  const showPhSss = allowedCards.has('ph_sss')
 
   // Template name for display
   const templateName = useMemo(() => {
@@ -941,7 +1377,7 @@ export default function ValidationPage() {
                   )}
                   </div>
                   <p className="text-xs text-green-600 dark:text-green-400 mt-1">
-                    ✅ Used for Philsys SDK
+                    ✅ Used for all verification endpoints
                   </p>
                 </div>
                 <div>
@@ -1043,7 +1479,7 @@ export default function ValidationPage() {
                     >{''}</Button>
                   </div>
                   <p className="text-xs text-green-600 dark:text-green-400 mt-1">
-                    ✅ Used for Philsys SDK
+                    ✅ Used for all verification endpoints
                   </p>
                 </div>
               )}
@@ -1465,6 +1901,578 @@ export default function ValidationPage() {
                 </div>
               )}
             </div>
+          </div>
+        </CardContent>
+      </Card>
+      )}
+
+      {/* Biometrics Verification */}
+      {showBiometricsVerification && (
+      <Card>
+        <CardHeader>
+          <CardTitle>Biometrics Verification</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-6">
+            {/* Biometric Verification Section */}
+            <div className="space-y-4">
+              <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Biometric Verification</h3>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Face Image (JPG/PNG, ≤10MB)
+                </label>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0]
+                    if (!file) return
+                    const err = validateImageFile(file)
+                    if (err) {
+                      setBiometricError(err)
+                      return
+                    }
+                    const dataUrl = await fileToDataUrl(file)
+                    setBiometricVerificationImageUrl(dataUrl)
+                    setBiometricError(null)
+                  }}
+                  className="block w-full text-sm text-gray-900 dark:text-gray-100 file:mr-4 file:py-2 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 dark:file:bg-blue-900/30 dark:file:text-blue-300"
+                />
+                {biometricVerificationImageUrl && (
+                  <img src={biometricVerificationImageUrl} alt="Biometric preview" className="mt-2 h-32 rounded border border-gray-200 dark:border-gray-700 object-cover" />
+                )}
+              </div>
+              <Button
+                variant="primary"
+                onClick={handleBiometricVerification}
+                disabled={isSubmittingBiometric || !biometricVerificationImageUrl}
+              >
+                {isSubmittingBiometric ? 'Verifying...' : 'Verify Biometrics'}
+              </Button>
+              {biometricVerificationResponse && (
+                <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                  <p className="text-xs"><span className="font-medium">Status:</span> {getStatusBadge(biometricVerificationResponse.status)}</p>
+                  <p className="text-xs mt-1"><span className="font-medium">ID:</span> <span className="font-mono">{biometricVerificationResponse.id}</span></p>
+                </div>
+              )}
+            </div>
+
+            {/* Divider */}
+            <div className="border-t border-gray-200 dark:border-gray-700"></div>
+
+            {/* Biometric Registration Section */}
+            <div className="space-y-4">
+              <h3 className="text-sm font-semibold text-gray-900 dark:text-gray-100">Biometric Registration</h3>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Username
+                </label>
+                <input
+                  type="text"
+                  value={biometricUsername}
+                  onChange={(e) => setBiometricUsername(e.target.value)}
+                  placeholder="e.g., john.doe@example.com or John Doe"
+                  className="w-full px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Face Image (JPG/PNG, ≤10MB)
+                </label>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0]
+                    if (!file) return
+                    const err = validateImageFile(file)
+                    if (err) {
+                      setBiometricError(err)
+                      return
+                    }
+                    const dataUrl = await fileToDataUrl(file)
+                    setBiometricRegistrationImageUrl(dataUrl)
+                    setBiometricError(null)
+                  }}
+                  className="block w-full text-sm text-gray-900 dark:text-gray-100 file:mr-4 file:py-2 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 dark:file:bg-blue-900/30 dark:file:text-blue-300"
+                />
+                {biometricRegistrationImageUrl && (
+                  <img src={biometricRegistrationImageUrl} alt="Registration preview" className="mt-2 h-32 rounded border border-gray-200 dark:border-gray-700 object-cover" />
+                )}
+              </div>
+              <Button
+                variant="primary"
+                onClick={handleBiometricRegistration}
+                disabled={isSubmittingBiometric || !biometricRegistrationImageUrl || !biometricUsername.trim()}
+              >
+                {isSubmittingBiometric ? 'Registering...' : 'Register Biometrics'}
+              </Button>
+              {biometricRegistrationResponse && (
+                <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                  <p className="text-xs"><span className="font-medium">Status:</span> {getStatusBadge(biometricRegistrationResponse.status)}</p>
+                  <p className="text-xs mt-1"><span className="font-medium">ID:</span> <span className="font-mono">{biometricRegistrationResponse.id}</span></p>
+                </div>
+              )}
+            </div>
+
+            {biometricError && (
+              <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3 text-sm text-red-700 dark:text-red-300">
+                {biometricError}
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+      )}
+
+      {/* Biometrics Face Compare / Face Match */}
+      {showBiometricsFaceCompare && (
+      <Card>
+        <CardHeader>
+          <CardTitle>Biometrics Face Match</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              Compare two facial images to determine if they match (for identity verification).
+            </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Image 1 (JPG/PNG, ≤10MB)
+                </label>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0]
+                    if (!file) return
+                    const err = validateImageFile(file)
+                    if (err) {
+                      setFaceMatchError(err)
+                      return
+                    }
+                    const dataUrl = await fileToDataUrl(file)
+                    setFaceMatchImage1Url(dataUrl)
+                    setFaceMatchError(null)
+                  }}
+                  className="block w-full text-sm text-gray-900 dark:text-gray-100 file:mr-4 file:py-2 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 dark:file:bg-blue-900/30 dark:file:text-blue-300"
+                />
+                {faceMatchImage1Url && (
+                  <img src={faceMatchImage1Url} alt="Image 1 preview" className="mt-2 h-32 w-full rounded border border-gray-200 dark:border-gray-700 object-cover" />
+                )}
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Image 2 (JPG/PNG, ≤10MB)
+                </label>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0]
+                    if (!file) return
+                    const err = validateImageFile(file)
+                    if (err) {
+                      setFaceMatchError(err)
+                      return
+                    }
+                    const dataUrl = await fileToDataUrl(file)
+                    setFaceMatchImage2Url(dataUrl)
+                    setFaceMatchError(null)
+                  }}
+                  className="block w-full text-sm text-gray-900 dark:text-gray-100 file:mr-4 file:py-2 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 dark:file:bg-blue-900/30 dark:file:text-blue-300"
+                />
+                {faceMatchImage2Url && (
+                  <img src={faceMatchImage2Url} alt="Image 2 preview" className="mt-2 h-32 w-full rounded border border-gray-200 dark:border-gray-700 object-cover" />
+                )}
+              </div>
+            </div>
+            <Button
+              variant="primary"
+              onClick={handleFaceMatch}
+              disabled={isSubmittingFaceMatch || !faceMatchImage1Url || !faceMatchImage2Url}
+            >
+              {isSubmittingFaceMatch ? 'Comparing...' : 'Compare Faces'}
+            </Button>
+            {faceMatchResponse && (
+              <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                <p className="text-xs"><span className="font-medium">Status:</span> {getStatusBadge(faceMatchResponse.status)}</p>
+                <p className="text-xs mt-1"><span className="font-medium">ID:</span> <span className="font-mono">{faceMatchResponse.id}</span></p>
+                <p className="text-xs mt-1 text-gray-600 dark:text-gray-400">
+                  {faceMatchResponse.status === 'approved' ? '✅ Images match (similarity score ≥ 70)' : '❌ Images do not match (similarity score < 70)'}
+                </p>
+              </div>
+            )}
+            {faceMatchError && (
+              <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3 text-sm text-red-700 dark:text-red-300">
+                {faceMatchError}
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+      )}
+
+      {/* Custom Document Verification */}
+      {showCustomDocument && (
+      <Card>
+        <CardHeader>
+        <CardTitle>Custom Document Verification</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            <p className="text-sm text-gray-600 dark:text-gray-400">
+              Upload a custom document (invoices, certificates, forms) and extract structured data.
+            </p>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Document (PNG/JPEG/PDF, ≤10MB) - Optional
+              </label>
+              <input
+                type="file"
+                accept="image/jpeg,image/png,application/pdf"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0]
+                  if (!file) return
+                  if (file.size > MAX_IMAGE_BYTES) {
+                    setCustomDocError('File is too large. Max size is ~10MB.')
+                    return
+                  }
+                  const dataUrl = await fileToDataUrl(file)
+                  setCustomDocImageUrl(dataUrl)
+                  setCustomDocError(null)
+                }}
+                className="block w-full text-sm text-gray-900 dark:text-gray-100 file:mr-4 file:py-2 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 dark:file:bg-blue-900/30 dark:file:text-blue-300"
+              />
+              {customDocImageUrl && customDocImageUrl.startsWith('data:image') && (
+                <img src={customDocImageUrl} alt="Document preview" className="mt-2 h-32 rounded border border-gray-200 dark:border-gray-700 object-cover" />
+              )}
+            </div>
+            <Button
+              variant="primary"
+              onClick={handleCustomDocument}
+              disabled={isSubmittingCustomDoc}
+            >
+              {isSubmittingCustomDoc ? 'Processing...' : 'Submit Custom Document'}
+            </Button>
+            {customDocResponse && (
+              <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                <p className="text-xs"><span className="font-medium">Status:</span> {getStatusBadge(customDocResponse.status)}</p>
+                <p className="text-xs mt-1"><span className="font-medium">ID:</span> <span className="font-mono">{customDocResponse.id}</span></p>
+              </div>
+            )}
+            {customDocError && (
+              <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3 text-sm text-red-700 dark:text-red-300">
+                {customDocError}
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+      )}
+
+      {/* PH Government Data Verification Cards */}
+      {showPhLto && (
+      <Card>
+        <CardHeader>
+          <CardTitle>PH LTO Drivers License Verification</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                License Number
+              </label>
+              <input
+                type="text"
+                value={phLtoLicenseNo}
+                onChange={(e) => setPhLtoLicenseNo(e.target.value)}
+                placeholder="e.g., N01-12-345678"
+                className="w-full px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <Button
+              variant="primary"
+              onClick={handlePhLto}
+              disabled={isSubmittingPhLto || !phLtoLicenseNo.trim()}
+            >
+              {isSubmittingPhLto ? 'Verifying...' : 'Verify LTO License'}
+            </Button>
+            {phLtoResponse && (
+              <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                <p className="text-xs"><span className="font-medium">Status:</span> {getStatusBadge(phLtoResponse.status)}</p>
+                <p className="text-xs mt-1"><span className="font-medium">ID:</span> <span className="font-mono">{phLtoResponse.id}</span></p>
+              </div>
+            )}
+            {phLtoError && (
+              <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3 text-sm text-red-700 dark:text-red-300">
+                {phLtoError}
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+      )}
+
+      {showPhPrc && (
+      <Card>
+        <CardHeader>
+          <CardTitle>PH PRC License Verification</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Profession
+              </label>
+              <input
+                type="text"
+                value={phPrcProfession}
+                onChange={(e) => setPhPrcProfession(e.target.value)}
+                placeholder="e.g., Engineer, Doctor, Nurse"
+                className="w-full px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Search By
+              </label>
+              <div className="flex gap-4">
+                <label className="flex items-center">
+                  <input
+                    type="radio"
+                    name="prcSearchBy"
+                    value="license"
+                    checked={phPrcSearchBy === 'license'}
+                    onChange={() => setPhPrcSearchBy('license')}
+                    className="mr-2"
+                  />
+                  License Number
+                </label>
+                <label className="flex items-center">
+                  <input
+                    type="radio"
+                    name="prcSearchBy"
+                    value="name"
+                    checked={phPrcSearchBy === 'name'}
+                    onChange={() => setPhPrcSearchBy('name')}
+                    className="mr-2"
+                  />
+                  Name
+                </label>
+              </div>
+            </div>
+            {phPrcSearchBy === 'license' ? (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    License Number
+                  </label>
+                  <input
+                    type="text"
+                    value={phPrcLicenseNo}
+                    onChange={(e) => setPhPrcLicenseNo(e.target.value)}
+                    placeholder="e.g., 123456"
+                    className="w-full px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Date of Birth
+                  </label>
+                  <input
+                    type="date"
+                    value={phPrcDateOfBirth}
+                    onChange={(e) => setPhPrcDateOfBirth(e.target.value)}
+                    className="w-full px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    First Name
+                  </label>
+                  <input
+                    type="text"
+                    value={phPrcFirstName}
+                    onChange={(e) => setPhPrcFirstName(e.target.value)}
+                    placeholder="e.g., Juan"
+                    className="w-full px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Last Name
+                  </label>
+                  <input
+                    type="text"
+                    value={phPrcLastName}
+                    onChange={(e) => setPhPrcLastName(e.target.value)}
+                    placeholder="e.g., DELA CRUZ"
+                    className="w-full px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+              </>
+            )}
+            <Button
+              variant="primary"
+              onClick={handlePhPrc}
+              disabled={isSubmittingPhPrc || !phPrcProfession.trim() || (phPrcSearchBy === 'license' ? (!phPrcLicenseNo.trim() || !phPrcDateOfBirth.trim()) : (!phPrcFirstName.trim() || !phPrcLastName.trim()))}
+            >
+              {isSubmittingPhPrc ? 'Verifying...' : 'Verify PRC License'}
+            </Button>
+            {phPrcResponse && (
+              <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                <p className="text-xs"><span className="font-medium">Status:</span> {getStatusBadge(phPrcResponse.status)}</p>
+                <p className="text-xs mt-1"><span className="font-medium">ID:</span> <span className="font-mono">{phPrcResponse.id}</span></p>
+              </div>
+            )}
+            {phPrcError && (
+              <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3 text-sm text-red-700 dark:text-red-300">
+                {phPrcError}
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+      )}
+
+      {showPhNationalPolice && (
+      <Card>
+        <CardHeader>
+          <CardTitle>PH National Police Clearance Verification</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Surname
+              </label>
+              <input
+                type="text"
+                value={phNationalPoliceSurname}
+                onChange={(e) => setPhNationalPoliceSurname(e.target.value)}
+                placeholder="e.g., DELA CRUZ"
+                className="w-full px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Clearance Number
+              </label>
+              <input
+                type="text"
+                value={phNationalPoliceClearanceNo}
+                onChange={(e) => setPhNationalPoliceClearanceNo(e.target.value)}
+                placeholder="e.g., NP-123456-2024"
+                className="w-full px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <Button
+              variant="primary"
+              onClick={handlePhNationalPolice}
+              disabled={isSubmittingPhNationalPolice || !phNationalPoliceSurname.trim() || !phNationalPoliceClearanceNo.trim()}
+            >
+              {isSubmittingPhNationalPolice ? 'Verifying...' : 'Verify National Police Clearance'}
+            </Button>
+            {phNationalPoliceResponse && (
+              <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                <p className="text-xs"><span className="font-medium">Status:</span> {getStatusBadge(phNationalPoliceResponse.status)}</p>
+                <p className="text-xs mt-1"><span className="font-medium">ID:</span> <span className="font-mono">{phNationalPoliceResponse.id}</span></p>
+              </div>
+            )}
+            {phNationalPoliceError && (
+              <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3 text-sm text-red-700 dark:text-red-300">
+                {phNationalPoliceError}
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+      )}
+
+      {showPhNbi && (
+      <Card>
+        <CardHeader>
+          <CardTitle>PH NBI Clearance Verification</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Clearance Number
+              </label>
+              <input
+                type="text"
+                value={phNbiClearanceNo}
+                onChange={(e) => setPhNbiClearanceNo(e.target.value)}
+                placeholder="e.g., N-1234567890-2024"
+                className="w-full px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <Button
+              variant="primary"
+              onClick={handlePhNbi}
+              disabled={isSubmittingPhNbi || !phNbiClearanceNo.trim()}
+            >
+              {isSubmittingPhNbi ? 'Verifying...' : 'Verify NBI Clearance'}
+            </Button>
+            {phNbiResponse && (
+              <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                <p className="text-xs"><span className="font-medium">Status:</span> {getStatusBadge(phNbiResponse.status)}</p>
+                <p className="text-xs mt-1"><span className="font-medium">ID:</span> <span className="font-mono">{phNbiResponse.id}</span></p>
+              </div>
+            )}
+            {phNbiError && (
+              <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3 text-sm text-red-700 dark:text-red-300">
+                {phNbiError}
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+      )}
+
+      {showPhSss && (
+      <Card>
+        <CardHeader>
+          <CardTitle>PH SSS Number Verification</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                SSS/CRN Number
+              </label>
+              <input
+                type="text"
+                value={phSssNumber}
+                onChange={(e) => setPhSssNumber(e.target.value)}
+                placeholder="e.g., 34-1234567-8"
+                className="w-full px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+            <Button
+              variant="primary"
+              onClick={handlePhSss}
+              disabled={isSubmittingPhSss || !phSssNumber.trim()}
+            >
+              {isSubmittingPhSss ? 'Verifying...' : 'Verify SSS Number'}
+            </Button>
+            {phSssResponse && (
+              <div className="p-3 bg-gray-50 dark:bg-gray-800 rounded-lg">
+                <p className="text-xs"><span className="font-medium">Status:</span> {getStatusBadge(phSssResponse.status)}</p>
+                <p className="text-xs mt-1"><span className="font-medium">ID:</span> <span className="font-mono">{phSssResponse.id}</span></p>
+              </div>
+            )}
+            {phSssError && (
+              <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-3 text-sm text-red-700 dark:text-red-300">
+                {phSssError}
+              </div>
+            )}
           </div>
         </CardContent>
       </Card>

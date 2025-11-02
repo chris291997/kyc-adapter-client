@@ -37,7 +37,7 @@ export interface Tenant {
 }
 
 // Verification Types
-export type VerificationType = 'document' | 'biometric' | 'address'
+export type VerificationType = 'document' | 'biometric' | 'address' | 'government_data'
 export type VerificationStatus = 'pending' | 'processing' | 'approved' | 'rejected' | 'expired' | 'needs_review'
 
 export interface Verification {
@@ -315,6 +315,111 @@ export interface DocumentVerificationRequest {
 export interface DocumentVerificationResponse {
   id: string
   status: 'pending' | 'processing' | 'approved' | 'rejected'
+}
+
+// Government Data Verification Types
+export interface GovernmentDataVerificationResponse {
+  id: string
+  status: 'pending' | 'processing' | 'approved' | 'rejected'
+}
+
+// PH LTO Drivers License Verification
+export interface PhLtoDriversLicenseRequest {
+  verificationId: string
+  templateId: string
+  licenseNo: string
+}
+
+// PH National Police Clearance Verification
+export interface PhNationalPoliceRequest {
+  verificationId: string
+  templateId: string
+  surname: string
+  clearanceNo: string
+}
+
+// PH NBI Clearance Verification
+export interface PhNbiRequest {
+  verificationId: string
+  templateId: string
+  clearanceNo: string
+}
+
+// PH PRC License Verification (supports two search methods)
+export interface PhPrcRequestByLicense {
+  verificationId: string
+  templateId: string
+  profession: string
+  licenseNo: string
+  dateOfBirth: string // Format: YYYY-MM-DD
+}
+
+export interface PhPrcRequestByName {
+  verificationId: string
+  templateId: string
+  profession: string
+  firstName: string
+  lastName: string
+}
+
+export type PhPrcRequest = PhPrcRequestByLicense | PhPrcRequestByName
+
+// PH SSS Number Verification
+export interface PhSssRequest {
+  verificationId: string
+  templateId: string
+  crnSsNumber: string
+}
+
+// Biometrics Face Match
+export interface BiometricsFaceMatchRequest {
+  verificationId: string
+  templateId: string
+  image1: string // base64 data URI: "data:image/jpeg;base64,..."
+  image2: string // base64 data URI: "data:image/jpeg;base64,..."
+}
+
+export interface BiometricsFaceMatchResponse {
+  id: string
+  status: 'approved' | 'rejected' | 'processing'
+}
+
+// Biometrics Registration
+export interface BiometricsRegistrationRequest {
+  verificationId: string
+  templateId: string
+  username: string
+  image: string // base64 data URI: "data:image/jpeg;base64,..."
+}
+
+export interface BiometricsRegistrationResponse {
+  id: string
+  status: 'approved' | 'rejected' | 'processing'
+}
+
+// Biometric Verification
+export interface BiometricVerificationRequest {
+  verificationId: string
+  templateId: string
+  image: string // base64 data URI: "data:image/jpeg;base64,..." (recommended)
+  imageBase64?: string // Alternative: base64 string without data URI prefix
+}
+
+export interface BiometricVerificationResponse {
+  id: string
+  status: 'approved' | 'rejected' | 'processing'
+}
+
+// Custom Document Verification
+export interface CustomDocumentVerificationRequest {
+  verificationId: string
+  templateId: string
+  document?: string // Optional: base64 data URI (PNG, JPEG, PDF supported)
+}
+
+export interface CustomDocumentVerificationResponse {
+  id: string
+  status: 'approved' | 'rejected' | 'processing'
 }
 
 // Template/Plan Types

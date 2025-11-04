@@ -165,8 +165,8 @@ export default function TenantDashboard() {
             icon={<CheckCircle />}
           />
           <StatCard
-            title="Approved"
-            value={stats?.verifications.approved || 0}
+            title="Verified"
+            value={stats?.verifications.verified || 0}
             icon={<CheckCircle />}
           />
           <StatCard

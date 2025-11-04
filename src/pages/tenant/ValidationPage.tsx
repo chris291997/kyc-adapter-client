@@ -2079,6 +2079,26 @@ export default function ValidationPage() {
                   {templateName}
                 </p>
               </div>
+              {/* Show profile name if verification is verified */}
+              {(() => {
+                const currentStatus = getVerificationStatus.toLowerCase()
+                const isVerified = currentStatus === 'verified' || currentStatus === 'approved'
+                const profileName = (verificationData as any)?.provider_response?.fullResponse?.verification?.profile_name
+                
+                if (isVerified && profileName) {
+                  return (
+                    <div className="md:col-span-2">
+                      <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">
+                        Verified User Profile Name
+                      </label>
+                      <p className="text-lg font-semibold text-gray-900 dark:text-gray-100">
+                        {profileName}
+                      </p>
+                    </div>
+                  )
+                }
+                return null
+              })()}
               {((verification?.external_verification_id) || verificationData?.external_verification_id) && (
                 <div className="md:col-span-2">
                   <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">

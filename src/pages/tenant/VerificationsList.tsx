@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from 'react-router-dom'
 import { apiClient } from '../../services/apiClient'
 import { API_ENDPOINTS } from '../../constants'
@@ -19,6 +19,7 @@ import type { Verification, PaginatedResponse, VerificationInitiateRequest } fro
 
 export default function VerificationsList() {
   const navigate = useNavigate()
+  const queryClient = useQueryClient()
   const [page, setPage] = useState(1)
   const [limit] = useState(10)
   const [showInitiateModal, setShowInitiateModal] = useState(false)
@@ -48,10 +49,14 @@ export default function VerificationsList() {
 
     // Subscribe to general verification updates
     const unsubscribe1 = websocketService.on(WS_EVENTS.VERIFICATION_STATUS_UPDATE, () => {
+      // Invalidate cache and refetch when status update is received
+      queryClient.invalidateQueries({ queryKey: ['tenant-verifications'], exact: false })
       refetch()
     })
 
     const unsubscribe2 = websocketService.on(WS_EVENTS.VERIFICATION_COMPLETED, () => {
+      // Invalidate cache and refetch when verification is completed
+      queryClient.invalidateQueries({ queryKey: ['tenant-verifications'], exact: false })
       refetch()
     })
 
@@ -59,11 +64,15 @@ export default function VerificationsList() {
       unsubscribe1()
       unsubscribe2()
     }
-  }, [refetch])
+  }, [refetch, queryClient])
 
   const handleInitiateVerification = async () => {
     try {
       const response = await apiClient.post<any>(API_ENDPOINTS.VERIFICATIONS_INITIATE, formData)
+      
+      // Invalidate and refetch verifications list to update cache
+      queryClient.invalidateQueries({ queryKey: ['tenant-verifications'], exact: false })
+      await refetch()
       
       // Ensure WebSocket is connected before subscribing
       if (!websocketService.isConnected()) {
@@ -78,6 +87,8 @@ export default function VerificationsList() {
         console.log(`🔔 Subscribing to verification: ${verificationId}`)
         websocketService.subscribeToVerification(verificationId, (data) => {
           console.log(`📨 Verification update received for ${verificationId}:`, data)
+          // Invalidate cache when WebSocket update is received
+          queryClient.invalidateQueries({ queryKey: ['tenant-verifications'], exact: false })
           refetch()
         })
         console.log(`✅ Successfully subscribed to verification: ${verificationId}`)
@@ -104,7 +115,6 @@ export default function VerificationsList() {
           testMode: true,
         },
       })
-      refetch()
     } catch (err) {
       console.error('Failed to initiate verification:', err)
       alert('Failed to initiate verification')
@@ -207,7 +217,12 @@ export default function VerificationsList() {
                     <TableCell>
                       <Badge>{capitalize((verification as any).verificationType || (verification as any).verification_type || 'N/A')}</Badge>
                     </TableCell>
-                    <TableCell>{verification.userEmail || 'N/A'}</TableCell>
+                    <TableCell>
+                      {(() => {
+                        const profileName = (verification as any)?.provider_response?.fullResponse?.verification?.profile_name
+                        return profileName || 'Unavailable'
+                      })()}
+                    </TableCell>
                     <TableCell>
                       {!verification.provider 
                         ? 'N/A'

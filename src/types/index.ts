@@ -315,7 +315,7 @@ export interface SuperAdminDashboardStats {
   verifications: {
     total: number
     pending: number
-    approved: number
+    verified: number
     rejected: number
     needsReview?: number
     needs_review?: number  // Backend might use snake_case
@@ -326,7 +326,7 @@ export interface TenantDashboardStats {
   verifications: {
     total: number
     pending: number
-    approved: number
+    verified: number
     rejected: number
     needsReview?: number
     needs_review?: number  // Backend might use snake_case

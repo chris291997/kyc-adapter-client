@@ -40,6 +40,45 @@ export interface Tenant {
 export type VerificationType = 'document' | 'biometric' | 'address' | 'government_data'
 export type VerificationStatus = 'pending' | 'processing' | 'approved' | 'rejected' | 'expired' | 'needs_review'
 
+// Image structure for verification steps
+export interface VerificationImage {
+  url: string  // Relative path: "/uploads/verifications/{id}/filename.jpg"
+  mimeType: string  // "image/jpeg", "image/png", etc.
+  size: number  // File size in bytes
+}
+
+// Verification step images structure
+export interface VerificationStepImages {
+  // For steps with multiple images (face match, document verification)
+  images?: {
+    [imageKey: string]: VerificationImage
+  }
+  // For steps with single image (registration, verification)
+  image?: VerificationImage
+  // For custom document step
+  document?: VerificationImage
+}
+
+// Complete verification step information
+export interface VerificationStep {
+  // Images (same structure as in images field)
+  images?: {
+    [imageKey: string]: VerificationImage
+  }
+  image?: VerificationImage
+  document?: VerificationImage
+  
+  // Step-specific metadata
+  score?: number  // For face match
+  probability?: number  // For biometric verification
+  faceId?: string  // For biometric operations
+  username?: string  // For registration
+  formData?: Record<string, any>  // For custom document
+  
+  // Timestamp
+  completedAt?: string  // ISO 8601 timestamp
+}
+
 export interface Verification {
   id: string
   verificationId?: string
@@ -47,6 +86,7 @@ export interface Verification {
   externalVerificationId?: string  // IDmeta verification ID
   external_verification_id?: string  // Backend might use snake_case
   verificationType: VerificationType
+  verification_types?: string[]  // Array of all verification types
   status: VerificationStatus
   provider: string | Provider | null  // Can be string ID or populated Provider object
   userEmail: string
@@ -68,6 +108,21 @@ export interface Verification {
   updatedAt?: string
   created_at?: string  // Backend might use snake_case
   updated_at?: string  // Backend might use snake_case
+  // New fields for image storage
+  images?: {
+    [stepType: string]: VerificationStepImages
+  }
+  verificationSteps?: {
+    [stepType: string]: VerificationStep
+  }
+  requestType?: string  // Most recent verification step type
+  metadata?: {
+    request_type?: string
+    flow?: string
+    verification_steps?: {
+      [stepType: string]: VerificationStep
+    }
+  }
 }
 
 export interface VerificationInitiateRequest {
@@ -104,12 +159,20 @@ export interface VerificationInitiateResponse {
 // Account Types
 export interface Account {
   id: string
-  email: string
-  name: string | null
-  phone: string | null
+  email?: string
+  name?: string | null
+  phone?: string | null
   verification_status: VerificationStatus
-  reference_id: string | null
+  reference_id?: string | null
   tenantId: string
+  verified_data?: {
+    externalVerificationId?: string
+    fullResponse?: {
+      verification?: {
+        profile_name?: string
+      }
+    }
+  }
   createdAt?: string
   updatedAt?: string
   created_at?: string  // Backend might use snake_case
@@ -420,6 +483,20 @@ export interface CustomDocumentVerificationRequest {
 export interface CustomDocumentVerificationResponse {
   id: string
   status: 'approved' | 'rejected' | 'processing'
+}
+
+// Finalize Verification
+export interface FinalizeVerificationRequest {
+  templateId: string
+  verificationId: string
+}
+
+export interface FinalizeVerificationResponse {
+  id: string
+  status: VerificationStatus
+  finalized: boolean
+  statusMessage: string
+  missingPlans: string[]
 }
 
 // Template/Plan Types

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useNavigate } from 'react-router-dom'
 import { apiClient } from '../../services/apiClient'
 import { API_ENDPOINTS } from '../../constants'
 import Card from '../../components/ui/Card'
@@ -15,6 +16,7 @@ import { formatDate } from '../../utils/format'
 import type { Account, PaginatedResponse } from '../../types'
 
 export default function AccountsList() {
+  const navigate = useNavigate()
   const [page, setPage] = useState(1)
   const [limit] = useState(10)
   const [searchQuery, setSearchQuery] = useState('')
@@ -80,7 +82,7 @@ export default function AccountsList() {
         {/* Search */}
         <div className="mb-6">
           <Input
-            placeholder="Search accounts by email, name, or reference ID..."
+            placeholder="Search accounts by name or reference ID..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             icon={<Search className="h-5 w-5" />}
@@ -106,8 +108,6 @@ export default function AccountsList() {
               <TableHead>
                 <TableRow>
                   <TableHeader>Name</TableHeader>
-                  <TableHeader>Email</TableHeader>
-                  <TableHeader>Phone</TableHeader>
                   <TableHeader>Status</TableHeader>
                   <TableHeader>Reference ID</TableHeader>
                   <TableHeader>Created</TableHeader>
@@ -115,40 +115,46 @@ export default function AccountsList() {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {accounts.map((account) => (
-                  <TableRow key={account.id}>
-                    <TableCell>
-                      <div className="font-medium text-gray-900 dark:text-gray-100">
-                        {account.name || 'N/A'}
-                      </div>
-                    </TableCell>
-                    <TableCell>{account.email}</TableCell>
-                    <TableCell>{account.phone || 'N/A'}</TableCell>
-                    <TableCell>
-                      <Badge variant={account.verification_status as any}>
-                        {account.verification_status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <div className="font-mono text-xs">
-                        {account.reference_id || 'N/A'}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      {formatDate(account.createdAt || account.created_at)}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <Button size="sm" variant="ghost">
-                          View
-                        </Button>
-                        <Button size="sm" variant="ghost">
-                          Verify
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
+                {accounts.map((account) => {
+                  // Get name from verified_data.fullResponse.verification.profile_name
+                  const profileName = account.verified_data?.fullResponse?.verification?.profile_name || account.name || 'N/A'
+                  // Get reference ID from verified_data.externalVerificationId
+                  const referenceId = account.verified_data?.externalVerificationId || account.reference_id || 'N/A'
+                  
+                  return (
+                    <TableRow key={account.id}>
+                      <TableCell>
+                        <div className="font-medium text-gray-900 dark:text-gray-100">
+                          {profileName}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={account.verification_status as any}>
+                          {account.verification_status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell>
+                        <div className="font-mono text-xs">
+                          {referenceId}
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        {formatDate(account.createdAt || account.created_at)}
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center gap-2">
+                          <Button 
+                            size="sm" 
+                            variant="ghost"
+                            onClick={() => navigate(`/tenant/accounts/${account.id}`)}
+                          >
+                            View
+                          </Button>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  )
+                })}
               </TableBody>
             </Table>
 

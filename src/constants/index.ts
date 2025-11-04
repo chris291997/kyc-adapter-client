@@ -59,6 +59,7 @@ export const STATUS_COLORS = {
   pending: 'text-yellow-600 bg-yellow-50 dark:bg-yellow-900/20 dark:text-yellow-400',
   processing: 'text-blue-600 bg-blue-50 dark:bg-blue-900/20 dark:text-blue-400',
   approved: 'text-green-600 bg-green-50 dark:bg-green-900/20 dark:text-green-400',
+  verified: 'text-green-600 bg-green-50 dark:bg-green-900/20 dark:text-green-400',
   rejected: 'text-red-600 bg-red-50 dark:bg-red-900/20 dark:text-red-400',
   expired: 'text-gray-600 bg-gray-50 dark:bg-gray-900/20 dark:text-gray-400',
   needs_review: 'text-orange-600 bg-orange-50 dark:bg-orange-900/20 dark:text-orange-400',
@@ -117,6 +118,8 @@ export const API_ENDPOINTS = {
   // Verifications
   VERIFICATIONS_INITIATE: '/verifications/initiate',
   VERIFICATIONS: '/verifications',
+  VERIFICATIONS_FINALIZE: '/verifications/finalize',
+  VERIFICATIONS_MANUAL_FINALIZE: '/verifications/manual-finalize',
   // PH PhilSys (PCN) - no /api/v1 prefix (API_BASE_URL already points to base)
   PH_PHILSYS_PCN: '/verifications/philippines/philsys/pcn',
   // PH Government Data Verification Endpoints

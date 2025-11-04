@@ -1,5 +1,5 @@
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import Card, { CardContent, CardHeader, CardTitle } from '../../components/ui/Card'
 import Button from '../../components/ui/Button'
 import Badge from '../../components/ui/Badge'
@@ -28,10 +28,12 @@ import type {
   PhPrcRequestByName,
   PhSssRequest,
   GovernmentDataVerificationResponse,
+  FinalizeVerificationRequest,
+  FinalizeVerificationResponse,
 } from '../../types'
 import { apiClient } from '../../services/apiClient'
-import { API_ENDPOINTS } from '../../constants'
-import { useEffect, useMemo, useState } from 'react'
+import { API_ENDPOINTS, API_BASE_URL } from '../../constants'
+import { useEffect, useMemo, useState, useCallback } from 'react'
 import { TEMPLATES, PLAN_ID_TO_CARDS } from '../../constants/templates'
 
 // Type for Philsys Face Liveness SDK Response
@@ -61,6 +63,7 @@ export default function ValidationPage() {
   const { verificationId } = useParams<{ verificationId: string }>()
   const navigate = useNavigate()
   const location = useLocation()
+  const queryClient = useQueryClient()
   const [apiResponse] = useState<VerificationInitiateResponse | null>(
     location.state?.response || null
   )
@@ -156,6 +159,12 @@ export default function ValidationPage() {
   const [phSssError, setPhSssError] = useState<string | null>(null)
   const [isSubmittingPhSss, setIsSubmittingPhSss] = useState(false)
   const [phSssResponse, setPhSssResponse] = useState<GovernmentDataVerificationResponse | null>(null)
+
+  // Finalize Verification states
+  const [isFinalizing, setIsFinalizing] = useState(false)
+  const [isManualFinalizing, setIsManualFinalizing] = useState(false)
+  const [finalizeError, setFinalizeError] = useState<string | null>(null)
+  const [finalizeResponse, setFinalizeResponse] = useState<FinalizeVerificationResponse | null>(null)
 
   const MAX_IMAGE_BYTES = 10 * 1024 * 1024 // ~10MB
 
@@ -607,10 +616,254 @@ export default function ValidationPage() {
   const { data: verificationData, isLoading: isLoadingVerification, refetch: refetchVerification } = useQuery<Verification>({
     queryKey: ['verification', verificationId],
     queryFn: () => apiClient.get<Verification>(`${API_ENDPOINTS.TENANT_VERIFICATIONS}/${verificationId}`),
-    // Enable fetch if we have a verificationId and either no initiate response
-    // or the initiate response is missing external_verification_id
-    enabled: !!verificationId && (!apiResponse || !apiResponse.external_verification_id),
+    // Always fetch when we have a verificationId (needed to load saved images and check completion status)
+    enabled: !!verificationId,
+    staleTime: 0, // Always consider data stale to force refetch when navigating back
+    gcTime: 5 * 60 * 1000, // Keep in cache for 5 minutes
   })
+
+  // Status mapping based on provider_response.fullResponse.status numeric codes
+  // Value 1 = Rejected, 2 = Review Needed, 3 = Verified, 4 = Incomplete, 5 = In Progress, 6 = Failed, 7 = Purged
+  const STATUS_CODE_MAP: Record<number, string> = {
+    1: 'rejected',
+    2: 'review_needed',
+    3: 'verified',
+    4: 'incomplete',
+    5: 'in_progress',
+    6: 'failed',
+    7: 'purged',
+  }
+
+  // API Request Status mapping (for reference, not currently used in status checking)
+  // Value 0 = Pending, 1 = Success, 2 = Failed
+  // const API_REQUEST_STATUS_MAP: Record<number, string> = {
+  //   0: 'pending',
+  //   1: 'success',
+  //   2: 'failed',
+  // }
+
+  // Helper function to extract and normalize status from provider_response
+  const getStatusFromProvider = useCallback((verificationData: Verification | undefined): string => {
+    if (!verificationData) return ''
+    
+    // Prioritize top-level status field first (most authoritative)
+    const topLevelStatus = verificationData.status
+    if (topLevelStatus) {
+      const normalizedTopLevel = String(topLevelStatus).toLowerCase().trim()
+      // If top-level status is a meaningful verification status (not just a boolean), use it
+      // Valid statuses: processing, pending, verified, approved, rejected, etc.
+      if (normalizedTopLevel && !['true', 'false', '1', '0'].includes(normalizedTopLevel)) {
+        return normalizedTopLevel
+      }
+    }
+    
+    const prov = (verificationData as any)?.provider_response
+    if (!prov) return String(verificationData.status || '').toLowerCase().trim()
+    
+    // Check status_message second (high priority)
+    const statusMessage = prov.status_message
+    if (statusMessage !== undefined && statusMessage !== null) {
+      return String(statusMessage).toLowerCase().trim()
+    }
+    
+    // Check fullResponse.status (can be number or string)
+    // Note: boolean status here might just indicate API success, not verification status
+    const statusFromProvider = prov.fullResponse?.status
+    if (statusFromProvider !== undefined && statusFromProvider !== null) {
+      // Handle numeric status codes (1-7) - these are verification status codes
+      if (typeof statusFromProvider === 'number') {
+        const mappedStatus = STATUS_CODE_MAP[statusFromProvider]
+        if (mappedStatus) return mappedStatus
+        // If not in map, convert to string
+        return String(statusFromProvider).toLowerCase().trim()
+      }
+      // For boolean status, only use it if top-level status doesn't exist or is not meaningful
+      // Boolean true/false in fullResponse.status might just mean API call success, not verification status
+      if (typeof statusFromProvider === 'boolean') {
+        // Only fall back to boolean conversion if we don't have a meaningful top-level status
+        if (!topLevelStatus || ['true', 'false', '1', '0'].includes(String(topLevelStatus).toLowerCase().trim())) {
+          return statusFromProvider ? 'approved' : 'rejected'
+        }
+        // Otherwise, keep using the top-level status
+        return String(topLevelStatus).toLowerCase().trim()
+      }
+      // Handle string status
+      return String(statusFromProvider).toLowerCase().trim()
+    }
+    
+    // Fallback to verificationData.status
+    return String(verificationData.status || '').toLowerCase().trim()
+  }, [])
+
+  // Finalize Verification Handler
+  const handleFinalizeVerification = useCallback(async () => {
+    if (!verificationId) {
+      setFinalizeError('Missing verificationId.')
+      return
+    }
+
+    // Check if already finalized
+    const isAlreadyFinalized = (verificationData as any)?.finalized || finalizeResponse?.finalized
+    
+    // Check if status is already in a final state using the helper function
+    const currentStatus = getStatusFromProvider(verificationData)
+    
+    // Status values that indicate verification is complete/finalized
+    const finalStatuses = ['verified', 'approved', 'rejected']
+    const hasFinalStatus = finalStatuses.some(finalStatus => currentStatus === finalStatus || currentStatus.startsWith(finalStatus))
+    
+    if (isAlreadyFinalized || hasFinalStatus) {
+      const prov = verificationData ? ((verificationData as any)?.provider_response) : null
+      const statusFromProvider = prov?.fullResponse?.status
+      const statusMessage = prov?.status_message
+      
+      console.log('[ValidationPage] Verification already finalized or has final status, skipping finalize request', {
+        isAlreadyFinalized,
+        hasFinalStatus,
+        currentStatus,
+        statusFromProvider,
+        statusMessage,
+        verificationDataStatus: verificationData?.status
+      })
+      // Still show the finalized notice if we have data
+      if (verificationData) {
+        const prov = (verificationData as any)?.provider_response
+        const statusMessage = prov?.status_message
+        const statusFromProvider = prov?.fullResponse?.status
+        
+        // Get display status (prioritize status_message, then mapped status, then fallback)
+        let displayStatus = statusMessage || currentStatus
+        if (typeof statusFromProvider === 'number' && STATUS_CODE_MAP[statusFromProvider]) {
+          displayStatus = STATUS_CODE_MAP[statusFromProvider]
+        } else if (!statusMessage && statusFromProvider !== undefined && statusFromProvider !== null) {
+          displayStatus = String(statusFromProvider)
+        }
+        
+        setFinalizeResponse({
+          id: verificationData.id || verificationId,
+          status: displayStatus as any,
+          finalized: true,
+          statusMessage: displayStatus || 'Finalized',
+          missingPlans: []
+        })
+      }
+      return
+    }
+
+    setIsFinalizing(true)
+    setFinalizeError(null)
+    try {
+      const payload: FinalizeVerificationRequest = {
+        verificationId,
+        templateId: String(selectedTemplateId),
+      }
+      const resp = await apiClient.post<FinalizeVerificationResponse>(API_ENDPOINTS.VERIFICATIONS_FINALIZE, payload)
+      setFinalizeResponse(resp)
+      if (resp?.status) {
+        setVerificationStatus(resp.status)
+        setVerification((prev) => (prev ? { ...prev, status: resp.status } as any : prev))
+      }
+      
+      // Invalidate and refetch React Query cache for real-time updates
+      queryClient.invalidateQueries({ queryKey: ['verification', verificationId] })
+      // Invalidate and refetch all tenant-verifications queries (with any pagination params)
+      queryClient.invalidateQueries({ queryKey: ['tenant-verifications'], exact: false })
+      queryClient.refetchQueries({ queryKey: ['tenant-verifications'], exact: false })
+      
+      if (refetchVerification) {
+        await refetchVerification()
+      }
+    } catch (e: any) {
+      setFinalizeError(e?.message || 'Failed to finalize verification.')
+    } finally {
+      setIsFinalizing(false)
+    }
+  }, [verificationId, verificationData, finalizeResponse, selectedTemplateId, refetchVerification, getStatusFromProvider, queryClient])
+
+  // Manual Finalize Verification Handler
+  const handleManualFinalizeVerification = useCallback(async () => {
+    if (!verificationId) {
+      setFinalizeError('Missing verificationId.')
+      return
+    }
+
+    // Check if already finalized
+    const isAlreadyFinalized = (verificationData as any)?.finalized || finalizeResponse?.finalized
+    
+    // Check if status is already in a final state using the helper function
+    const currentStatus = getStatusFromProvider(verificationData)
+    
+    // Status values that indicate verification is complete/finalized
+    const finalStatuses = ['verified', 'approved', 'rejected']
+    const hasFinalStatus = finalStatuses.some(finalStatus => currentStatus === finalStatus || currentStatus.startsWith(finalStatus))
+    
+    if (isAlreadyFinalized || hasFinalStatus) {
+      const prov = verificationData ? ((verificationData as any)?.provider_response) : null
+      const statusFromProvider = prov?.fullResponse?.status
+      const statusMessage = prov?.status_message
+      
+      console.log('[ValidationPage] Verification already finalized or has final status, skipping manual finalize request', {
+        isAlreadyFinalized,
+        hasFinalStatus,
+        currentStatus,
+        statusFromProvider,
+        statusMessage,
+        verificationDataStatus: verificationData?.status
+      })
+      // Still show the finalized notice if we have data
+      if (verificationData) {
+        const prov = (verificationData as any)?.provider_response
+        const statusMessage = prov?.status_message
+        const statusFromProvider = prov?.fullResponse?.status
+        
+        // Get display status (prioritize status_message, then mapped status, then fallback)
+        let displayStatus = statusMessage || currentStatus
+        if (typeof statusFromProvider === 'number' && STATUS_CODE_MAP[statusFromProvider]) {
+          displayStatus = STATUS_CODE_MAP[statusFromProvider]
+        } else if (!statusMessage && statusFromProvider !== undefined && statusFromProvider !== null) {
+          displayStatus = String(statusFromProvider)
+        }
+        
+        setFinalizeResponse({
+          id: verificationData.id || verificationId,
+          status: displayStatus as any,
+          finalized: true,
+          statusMessage: displayStatus || 'Finalized',
+          missingPlans: []
+        })
+      }
+      return
+    }
+
+    setIsManualFinalizing(true)
+    setFinalizeError(null)
+    try {
+      const payload: FinalizeVerificationRequest = {
+        verificationId,
+        templateId: String(selectedTemplateId),
+      }
+      const resp = await apiClient.post<FinalizeVerificationResponse>(API_ENDPOINTS.VERIFICATIONS_MANUAL_FINALIZE, payload)
+      setFinalizeResponse(resp)
+      if (resp?.status) {
+        setVerificationStatus(resp.status)
+        setVerification((prev) => (prev ? { ...prev, status: resp.status } as any : prev))
+      }
+      
+      // Invalidate and refetch React Query cache for real-time updates
+      queryClient.invalidateQueries({ queryKey: ['verification', verificationId] })
+      // Invalidate and refetch all tenant-verifications queries (with any pagination params)
+      queryClient.invalidateQueries({ queryKey: ['tenant-verifications'], exact: false })
+      queryClient.refetchQueries({ queryKey: ['tenant-verifications'], exact: false })
+      
+      if (refetchVerification) {
+        await refetchVerification()
+      }
+    } catch (e: any) {
+      setFinalizeError(e?.message || 'Failed to manually finalize verification.')
+    } finally {
+      setIsManualFinalizing(false)
+    }
+  }, [verificationId, verificationData, finalizeResponse, selectedTemplateId, refetchVerification, getStatusFromProvider, queryClient])
 
   // Detect external_verification_id mismatch between initiated response and fetched verification
   const externalIdFromData = verificationData?.external_verification_id
@@ -619,6 +872,53 @@ export default function ValidationPage() {
 
   // Compute which cards to render based on backend response plans when available
   const allowedCards = useMemo(() => {
+    // Map verification_types directly to card types (highest priority)
+    const verificationTypes = verificationData?.verification_types || []
+    const cardsFromTypes = new Set<string>()
+    verificationTypes.forEach((type: string) => {
+      // Map verification_type strings to card types
+      switch (type) {
+        case 'document_verification':
+          cardsFromTypes.add('document_verification')
+          break
+        case 'biometrics_verification':
+          cardsFromTypes.add('biometrics_verification')
+          break
+        case 'biometrics_face_compare':
+          cardsFromTypes.add('biometrics_face_compare')
+          break
+        case 'scan_qr':
+        case 'philsys':
+          cardsFromTypes.add('philsys_liveness')
+          break
+        case 'custom_document':
+          cardsFromTypes.add('custom_document')
+          break
+        case 'philippines_driving_license':
+          cardsFromTypes.add('ph_lto_drivers_license')
+          break
+        case 'philippines_prc':
+          cardsFromTypes.add('ph_prc')
+          break
+        case 'philippines_national_police':
+          cardsFromTypes.add('ph_national_police')
+          break
+        case 'philippines_nbi_clearance':
+          cardsFromTypes.add('ph_nbi')
+          break
+        case 'philippines_social_security':
+          cardsFromTypes.add('ph_sss')
+          break
+      }
+    })
+
+    // If we have cards from verification_types, use those
+    if (cardsFromTypes.size > 0) {
+      console.log('[ValidationPage] Allowed cards from verification_types:', Array.from(cardsFromTypes), 'types:', verificationTypes)
+      return cardsFromTypes
+    }
+
+    // Fall back to plan IDs from backend response
     const planIdsFromResponse: number[] = (() => {
       const prov = (verificationData as any)?.provider_response
       const providerPlans = prov?.providerData?.plans || (prov?.fullResponse?.plans) || (verificationData as any)?.providerData?.plans || (verificationData as any)?.plans
@@ -638,7 +938,7 @@ export default function ValidationPage() {
       return []
     })()
 
-    // Use template plans if no plans from backend response, or if explicitly forcing template-based cards
+    // Use template plans if no plans from backend response
     const templatePlans = TEMPLATES.find(t => t.id === selectedTemplateId)?.dropzone_plans || []
     const planIds = planIdsFromResponse.length > 0 && planIdsFromResponse.some(p => PLAN_ID_TO_CARDS[p]?.length > 0)
       ? planIdsFromResponse
@@ -664,6 +964,19 @@ export default function ValidationPage() {
   const showPhNationalPolice = allowedCards.has('ph_national_police')
   const showPhNbi = allowedCards.has('ph_nbi')
   const showPhSss = allowedCards.has('ph_sss')
+
+  // Check if face match is required before biometric verification
+  const isFaceMatchRequired = showBiometricsVerification && showBiometricsFaceCompare
+  // Check if face match is completed either from recent submission or from saved verification data
+  const isFaceMatchCompleted = useMemo(() => {
+    // Check recent submission state
+    if (faceMatchResponse?.status === 'approved') return true
+    // Check verification data from API (for existing verifications)
+    const faceMatchStep = verificationData?.verificationSteps?.biometrics_face_match || 
+                          verificationData?.metadata?.verification_steps?.biometrics_face_match
+    return !!faceMatchStep?.completedAt
+  }, [faceMatchResponse, verificationData])
+  const isBiometricsVerificationDisabled = isFaceMatchRequired && !isFaceMatchCompleted
 
   // Template name for display
   const templateName = useMemo(() => {
@@ -697,6 +1010,12 @@ export default function ValidationPage() {
         
         if (status) {
           setVerificationStatus(status)
+          
+          // Invalidate and refetch React Query cache for real-time updates
+          queryClient.invalidateQueries({ queryKey: ['verification', verificationId] })
+          // Invalidate and refetch all tenant-verifications queries (with any pagination params)
+          queryClient.invalidateQueries({ queryKey: ['tenant-verifications'], exact: false })
+          queryClient.refetchQueries({ queryKey: ['tenant-verifications'], exact: false })
           
           // Update verification state with WebSocket data
           setVerification((prev) => {
@@ -739,6 +1058,12 @@ export default function ValidationPage() {
           if (status) {
             setVerificationStatus(status)
             
+            // Invalidate and refetch React Query cache for real-time updates
+            queryClient.invalidateQueries({ queryKey: ['verification', verificationId] })
+            // Invalidate and refetch all tenant-verifications queries (with any pagination params)
+            queryClient.invalidateQueries({ queryKey: ['tenant-verifications'], exact: false })
+            queryClient.refetchQueries({ queryKey: ['tenant-verifications'], exact: false })
+            
             // Update verification state with WebSocket data
             setVerification((prev) => {
               const updated = {
@@ -775,7 +1100,7 @@ export default function ValidationPage() {
         unsubscribeExternal()
     }
     }
-  }, [verificationId, apiResponse, verificationData, verification, refetchVerification])
+  }, [verificationId, apiResponse, verificationData, verification, refetchVerification, queryClient])
 
   // Update verification state when data is loaded
   useEffect(() => {
@@ -797,6 +1122,254 @@ export default function ValidationPage() {
       localStorage.setItem(`selected_template_${verificationId}`, String(derived))
     }
   }, [verificationData, verificationId])
+
+  // Extract status from provider_response.fullResponse.status if available
+  const getVerificationStatus = useMemo(() => {
+    if (verificationData) {
+      // Prioritize top-level status field first (most authoritative)
+      const topLevelStatus = verificationData.status
+      if (topLevelStatus) {
+        const normalizedTopLevel = String(topLevelStatus).trim()
+        // If top-level status is a meaningful verification status, use it
+        if (normalizedTopLevel && !['true', 'false', '1', '0'].includes(normalizedTopLevel.toLowerCase())) {
+          return normalizedTopLevel
+        }
+      }
+      
+      const prov = (verificationData as any)?.provider_response
+      const statusMessage = prov?.status_message
+      const statusFromProvider = prov?.fullResponse?.status
+      
+      // Check status_message second (high priority)
+      if (statusMessage !== undefined && statusMessage !== null) {
+        return String(statusMessage)
+      }
+      
+      // Then check fullResponse.status (can be number, boolean, or string)
+      if (statusFromProvider !== undefined && statusFromProvider !== null) {
+        // Handle numeric status codes (map to readable status)
+        if (typeof statusFromProvider === 'number') {
+          const mappedStatus = STATUS_CODE_MAP[statusFromProvider]
+          if (mappedStatus) return mappedStatus
+          return String(statusFromProvider)
+        }
+        // For boolean status, only use it if top-level status doesn't exist or is not meaningful
+        if (typeof statusFromProvider === 'boolean') {
+          // Only fall back to boolean conversion if we don't have a meaningful top-level status
+          if (!topLevelStatus || ['true', 'false', '1', '0'].includes(String(topLevelStatus).toLowerCase().trim())) {
+            return statusFromProvider ? 'approved' : 'rejected'
+          }
+          // Otherwise, keep using the top-level status
+          return String(topLevelStatus)
+        }
+        // Handle string status
+        return String(statusFromProvider)
+      }
+      
+      // Fall back to verificationData.status
+      return verificationData.status || verification?.status || verificationStatus
+    }
+    return verification?.status || verificationStatus || ''
+  }, [verificationData, verification, verificationStatus])
+
+  // Check if verification is finalized and show notice immediately
+  useEffect(() => {
+    if (!verificationData) return
+    
+    const isFinalized = (verificationData as any)?.finalized
+    if (isFinalized && !finalizeResponse) {
+      // Verification is already finalized, show the notice immediately
+      const prov = (verificationData as any)?.provider_response
+      const statusFromProvider = prov?.fullResponse?.status
+      const status = statusFromProvider !== undefined && statusFromProvider !== null
+        ? (typeof statusFromProvider === 'boolean' ? (statusFromProvider ? 'approved' : 'rejected') : String(statusFromProvider))
+        : verificationData.status
+      
+      setFinalizeResponse({
+        id: verificationData.id || verificationId || '',
+        status: status as any,
+        finalized: true,
+        statusMessage: status || 'Finalized',
+        missingPlans: []
+      })
+    }
+  }, [verificationData, finalizeResponse, verificationId])
+
+  // Force refetch when verificationId changes to get fresh data
+  useEffect(() => {
+    if (!verificationId) return
+    // Refetch verification data when navigating to a different verification
+    refetchVerification()
+  }, [verificationId, refetchVerification])
+
+  // Helper function to construct full image URL from relative path
+  const getImageUrl = (relativeUrl?: string): string | null => {
+    if (!relativeUrl) return null
+    // If already a full URL or data URL, return as-is
+    if (relativeUrl.startsWith('http://') || relativeUrl.startsWith('https://') || relativeUrl.startsWith('data:')) {
+      return relativeUrl
+    }
+    // Ensure API_BASE_URL doesn't have trailing slash and relativeUrl has leading slash
+    const baseUrl = API_BASE_URL.endsWith('/') ? API_BASE_URL.slice(0, -1) : API_BASE_URL
+    const path = relativeUrl.startsWith('/') ? relativeUrl : `/${relativeUrl}`
+    return `${baseUrl}${path}`
+  }
+
+  // Clear image states when verificationId changes
+  useEffect(() => {
+    // Reset all image states when verificationId changes
+    setFaceMatchImage1Url('')
+    setFaceMatchImage2Url('')
+    setBiometricVerificationImageUrl('')
+    setBiometricRegistrationImageUrl('')
+    setBiometricUsername('')
+    setDocFrontDataUrl('')
+    setDocBackDataUrl('')
+    setCustomDocImageUrl('')
+    setFaceMatchResponse(null)
+    setBiometricVerificationResponse(null)
+    setBiometricRegistrationResponse(null)
+    setLastDocResponse(null)
+    setCustomDocResponse(null)
+  }, [verificationId])
+
+  // Extract and load saved images from verification response
+  useEffect(() => {
+    if (!verificationData || !verificationId) return
+
+    // Extract images from images field or metadata.verification_steps
+    const images = verificationData.images || {}
+    const steps = verificationData.verificationSteps || verificationData.metadata?.verification_steps || {}
+
+    console.log('[ValidationPage] Loading images from verification data:', {
+      verificationId,
+      hasImages: !!verificationData.images,
+      hasSteps: !!steps,
+      hasMetadataSteps: !!verificationData.metadata?.verification_steps,
+      stepsKeys: Object.keys(steps),
+      apiBaseUrl: API_BASE_URL
+    })
+
+    // Load Biometrics Face Match images
+    const faceMatchStep = steps.biometrics_face_match || images.biometrics_face_match
+    if (faceMatchStep?.images) {
+      const img1RelativeUrl = faceMatchStep.images.image1?.url
+      const img2RelativeUrl = faceMatchStep.images.image2?.url
+      const img1Url = getImageUrl(img1RelativeUrl)
+      const img2Url = getImageUrl(img2RelativeUrl)
+      console.log('[ValidationPage] Face Match images:', {
+        img1Relative: img1RelativeUrl,
+        img1Full: img1Url,
+        img2Relative: img2RelativeUrl,
+        img2Full: img2Url
+      })
+      if (img1Url) setFaceMatchImage1Url(img1Url)
+      if (img2Url) setFaceMatchImage2Url(img2Url)
+    }
+
+    // Load Biometric Verification image
+    const biometricVerifStep = steps.biometric_verification || images.biometric_verification
+    if (biometricVerifStep?.image) {
+      const imgUrl = getImageUrl(biometricVerifStep.image.url)
+      if (imgUrl) setBiometricVerificationImageUrl(imgUrl)
+    }
+
+    // Load Biometrics Registration image and username
+    const biometricRegStep = steps.biometrics_registration || images.biometrics_registration
+    if (biometricRegStep?.image) {
+      const imgUrl = getImageUrl(biometricRegStep.image.url)
+      if (imgUrl) setBiometricRegistrationImageUrl(imgUrl)
+    }
+    if (biometricRegStep?.username) {
+      setBiometricUsername(biometricRegStep.username)
+    }
+
+    // Load Document Verification images
+    const docVerifStep = steps.document_verification || images.document_verification
+    if (docVerifStep?.images) {
+      const frontUrl = getImageUrl(docVerifStep.images.front?.url)
+      const backUrl = getImageUrl(docVerifStep.images.back?.url)
+      if (frontUrl) setDocFrontDataUrl(frontUrl)
+      if (backUrl) setDocBackDataUrl(backUrl)
+    }
+
+    // Load Custom Document image
+    const customDocStep = steps.custom_document || images.custom_document
+    if (customDocStep?.document) {
+      const docUrl = getImageUrl(customDocStep.document.url)
+      if (docUrl) setCustomDocImageUrl(docUrl)
+    }
+  }, [verificationData, verificationId])
+
+  // Check if all verification steps are completed and auto-finalize
+  useEffect(() => {
+    if (!verificationData || !verificationId || finalizeResponse?.finalized || isFinalizing || isManualFinalizing) return
+
+    // Check if already finalized or has final status FIRST (early return)
+    const isFinalized = (verificationData as any)?.finalized || finalizeResponse?.finalized
+    
+    // Use the helper function to get normalized status
+    const currentStatus = getStatusFromProvider(verificationData)
+    
+    // Status values that indicate verification is complete/finalized
+    const finalStatuses = ['verified', 'approved', 'rejected']
+    const hasFinalStatus = finalStatuses.some(finalStatus => currentStatus === finalStatus || currentStatus.trim().startsWith(finalStatus))
+    
+    // Early return if already finalized or has final status
+    if (isFinalized || hasFinalStatus) {
+      const prov = (verificationData as any)?.provider_response
+      const statusFromProvider = prov?.fullResponse?.status
+      const statusMessage = prov?.status_message
+      
+      console.log('[ValidationPage] Verification already finalized or has final status, skipping auto-finalize check', {
+        isFinalized,
+        hasFinalStatus,
+        currentStatus,
+        statusFromProvider,
+        statusMessage,
+        verificationDataStatus: verificationData.status
+      })
+      return
+    }
+
+    // Check if this is an IDmeta verification
+    const providerName = (verificationData.provider as any)?.name || (typeof verificationData.provider === 'string' ? verificationData.provider : null)
+    const isIdmeta = providerName === 'IDMeta' || verificationData?.external_verification_id
+
+    if (!isIdmeta) return
+
+    // Get expected verification types from allowed cards
+    const expectedSteps = Array.from(allowedCards)
+    const steps = verificationData.verificationSteps || verificationData.metadata?.verification_steps || {}
+
+    // Map card types to step keys in metadata
+    const stepKeyMap: Record<string, string> = {
+      'document_verification': 'document_verification',
+      'biometrics_verification': 'biometric_verification',
+      'biometrics_face_compare': 'biometrics_face_match',
+      'custom_document': 'custom_document',
+    }
+
+    // Check if all expected steps have completedAt
+    const allStepsCompleted = expectedSteps.length > 0 && expectedSteps.every((cardType) => {
+      const stepKey = stepKeyMap[cardType] || cardType
+      const step = steps[stepKey]
+      return step?.completedAt !== undefined
+    })
+    
+    // Auto-finalize if all steps are completed
+    if (allStepsCompleted) {
+      console.log('[ValidationPage] All verification steps completed, auto-finalizing...', {
+        expectedSteps,
+        steps: Object.keys(steps),
+        allCompleted: allStepsCompleted,
+        currentStatus,
+        isFinalized
+      })
+      // Use the handler function
+      handleFinalizeVerification()
+    }
+  }, [verificationData, verificationId, allowedCards, finalizeResponse, isFinalizing, isManualFinalizing, handleFinalizeVerification, getStatusFromProvider])
 
   // If initiated without external_verification_id, attempt to fetch it shortly after mount
   useEffect(() => {
@@ -862,27 +1435,14 @@ export default function ValidationPage() {
     }
   }, [])
 
-  // Request camera permission on page load
-  useEffect(() => {
-    const requestCameraPermission = async () => {
-      try {
-        // Check if getUserMedia is available
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          return
-        }
-        
-        // Request camera access
-        const stream = await navigator.mediaDevices.getUserMedia({ video: true })
-        // Immediately stop the stream - we just wanted to request permission
-        stream.getTracks().forEach(track => track.stop())
-      } catch (error) {
-        // Permission denied or camera not available - this is okay, user can grant it later
-        console.warn('Camera permission not granted on page load:', error)
-      }
-    }
-
-    requestCameraPermission()
-  }, [])
+  // Don't request camera permission on page load - SDK will handle it
+  // Requesting permission before SDK can cause browser caching issues
+  // useEffect(() => {
+  //   const requestCameraPermission = async () => {
+  //     ...
+  //   }
+  //   requestCameraPermission()
+  // }, [])
 
 
   const copyToClipboard = (text: string) => {
@@ -893,8 +1453,16 @@ export default function ValidationPage() {
   const handlePhilsysLivenessCheck = () => {
     // Prevent multiple simultaneous starts (which can cause instant close)
     const runningRef = (handlePhilsysLivenessCheck as any)._runningRef || ((handlePhilsysLivenessCheck as any)._runningRef = { current: false })
-    if (runningRef.current) return
+    const cleanupRef = (handlePhilsysLivenessCheck as any)._cleanupRef || ((handlePhilsysLivenessCheck as any)._cleanupRef = { current: false })
+    
+    // Prevent starting if already running or cleanup is in progress
+    if (runningRef.current || cleanupRef.current) {
+      console.log('SDK already running or cleanup in progress, skipping...')
+      return
+    }
+    
     runningRef.current = true
+    
     // Block if we detect an external_verification_id mismatch
     if (externalIdMismatch) {
       setPhilsysError('External verification ID mismatch detected. Please refresh and ensure you use the verification opened on this page.')
@@ -926,20 +1494,44 @@ export default function ValidationPage() {
       return
     }
       
-    // Helper: forcefully stop all active camera tracks
-    const stopAllCameraTracks = async () => {
+    // Helper: forcefully stop all active camera tracks and ensure fresh instance
+    // IMPORTANT: This should NOT be called while SDK is actively using the camera
+    // Only call this BEFORE SDK starts (preflight) or AFTER SDK session completes
+    const stopAllCameraTracks = async (skipFreshStream = false) => {
       try {
-        const devices = await navigator.mediaDevices.enumerateDevices()
-        const videoDev = devices.filter(d => d.kind === 'videoinput')
-        if (videoDev.length > 0 && navigator.mediaDevices?.getUserMedia) {
-          // Attempt to get and immediately stop a stream to release any lingering locks
+        // Only enumerate devices - don't request camera permission
+        // SDK will handle its own camera access
+        try {
+          if (navigator.mediaDevices?.enumerateDevices) {
+            await navigator.mediaDevices.enumerateDevices()
+          }
+        } catch { void 0 }
+        
+        // Don't request camera access here - SDK handles it
+        // Only stop existing tracks from video elements if SDK was running
+        if (!skipFreshStream) {
+          // Try to stop any existing tracks without requesting new ones
+          // This is only for cleanup after SDK has run
           try {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: true })
-            stream.getTracks().forEach(track => {
-              track.stop()
-              console.log('Stopped camera track:', track.id)
+            // Get all existing media tracks from all video elements
+            const videoElements = document.querySelectorAll('video')
+            videoElements.forEach(video => {
+              if (video.srcObject instanceof MediaStream) {
+                video.srcObject.getTracks().forEach(track => {
+                  if (track.kind === 'video') {
+                    try {
+                      track.stop()
+                      console.log('Cleanup: Stopped camera track:', track.id)
+                    } catch (e) {
+                      console.log('Cleanup: Error stopping track:', e)
+                    }
+                  }
+                })
+              }
             })
-          } catch { void 0 }
+          } catch (e) {
+            console.log('Cleanup: Could not access video elements:', e)
+          }
         }
       } catch { void 0 }
     }
@@ -971,80 +1563,47 @@ export default function ValidationPage() {
       }
     }
 
-    // Preflight: attempt camera access and immediately release to avoid stale lock between runs
-    // This also surfaces permission errors before invoking the SDK
-    const preflight = async () => {
-      // First, stop any lingering tracks from previous run
-      await stopAllCameraTracks()
-      
-      try {
-        if (navigator.mediaDevices?.getUserMedia) {
-          const s = await navigator.mediaDevices.getUserMedia({ video: true })
-          s.getTracks().forEach(t => t.stop())
-        }
-      } catch (e: any) {
-        const errName = e?.name || ''
-        if (errName === 'NotAllowedError') {
-          setPhilsysError('Camera permission denied. Please allow camera access and try again.')
-        } else if (errName === 'NotFoundError') {
-          setPhilsysError('No camera device found.')
-        } else if (errName === 'NotReadableError') {
-          setPhilsysError('Camera is in use by another application. Close it and try again.')
-        } else if (errName === 'OverconstrainedError') {
-          setPhilsysError('Camera constraints cannot be satisfied by any available device.')
-        } else if (errName === 'SecurityError') {
-          setPhilsysError('Camera blocked due to insecure context. Use HTTPS or localhost.')
-        } else {
-          setPhilsysError(e?.message || 'Unable to access camera.')
-        }
-        runningRef.current = false
-        throw e
-      }
-    }
-
-    // Kick off SDK after preflight completes
-    const startSDK = async () => {
-      const sdkInstance = window.IDmetaPhilsysLiveness!()
+    // Store SDK instance for proper cleanup on cancel
+    let sdkInstanceRef: any = null
     
-      // Verify .start() method exists
-      if (typeof sdkInstance?.start !== 'function') {
-        setPhilsysError('SDK start method not found.')
-        setIsPhilsysTesting(false)
+    // Kick off SDK - SDK will handle camera access directly
+    // No camera cleanup before SDK - let SDK handle everything fresh
+    const startSDK = async () => {
+      sdkInstanceRef = window.IDmetaPhilsysLiveness!()
+    
+    // Verify .start() method exists
+    if (typeof sdkInstanceRef?.start !== 'function') {
+      setPhilsysError('SDK start method not found.')
+          setIsPhilsysTesting(false)
         runningRef.current = false
-        return
-      }
-      
-      // Sanitize parameters and call SDK with external verification ID
-      const verificationIdForSDK = String(externalVerificationId).trim()
-      const tokenForSDK = String(API_KEY).trim()
-      if (!verificationIdForSDK || !tokenForSDK) {
-        setPhilsysError('Invalid SDK parameters. Missing verificationId or token.')
+      return
+    }
+    
+    // Sanitize parameters and call SDK with external verification ID
+    const verificationIdForSDK = String(externalVerificationId).trim()
+    const tokenForSDK = String(API_KEY).trim()
+    if (!verificationIdForSDK || !tokenForSDK) {
+      setPhilsysError('Invalid SDK parameters. Missing verificationId or token.')
         runningRef.current = false
-        return
-      }
-      const sdkPromise = sdkInstance.start({
-        verificationId: verificationIdForSDK,
-        token: tokenForSDK,
-      })
-      
-      // Set loading state after initiating SDK to preserve user gesture timing
-      setIsPhilsysTesting(true)
-      setPhilsysError(null)
-      setPhilsysResponse(null)
-      
-      setShowSDKWarning(true)
+      return
+    }
+    const sdkPromise = sdkInstanceRef.start({
+      verificationId: verificationIdForSDK,
+      token: tokenForSDK,
+    })
+    
+    // Set loading state after initiating SDK to preserve user gesture timing
+    setIsPhilsysTesting(true)
+    setPhilsysError(null)
+    setPhilsysResponse(null)
+    
+    setShowSDKWarning(true)
       
       let didRetry = false
       const tryReloadAndRetry = async (reason?: string) => {
         if (didRetry) return
         didRetry = true
-        // Best-effort stop any tracks
-        try {
-          if (navigator.mediaDevices?.getUserMedia) {
-            const s = await navigator.mediaDevices.getUserMedia({ video: true })
-            s.getTracks().forEach(t => t.stop())
-          }
-        } catch { void 0 }
+        // Don't request camera - just reload SDK and let it handle camera access
         await reloadIdmetaSDK()
         if (!window.IDmetaPhilsysLiveness) {
           setPhilsysError(reason || 'Unable to initialize camera. Please refresh the page.')
@@ -1085,11 +1644,12 @@ export default function ValidationPage() {
           setPhilsysResponse(data)
           setIsPhilsysTesting(false)
           setShowSDKWarning(false)
-        }).catch((error: any) => {
+        }).catch(async (error: any) => {
           let errorMsg = error?.message || 'Face liveness check failed'
           const errName = (error as any)?.name || ''
+          // Check for parsing errors in error message - often indicates camera not ready
           if (errorMsg.includes('parse') || errorMsg.includes('JSON') || errorMsg.includes('Unable to parse')) {
-            errorMsg = 'Face liveness session may have exited unexpectedly. Please try again.'
+            errorMsg = 'Camera may not be ready. Please wait a moment and try again, or ensure no other application is using the camera.'
           } else if (errName === 'NotAllowedError') {
             errorMsg = 'Camera permission denied. Please allow camera access and try again.'
           } else if (errName === 'NotFoundError') {
@@ -1099,7 +1659,17 @@ export default function ValidationPage() {
           } else if (errName === 'NotReadableError') {
             errorMsg = 'Camera is in use by another application. Close it and try again.'
           } else if (errorMsg.includes('exited') || errorMsg.includes('session')) {
+            // User cancelled or session ended - need aggressive cleanup
             errorMsg = `Face liveness session ended: ${errorMsg}`
+            
+            // Wait for SDK to fully release camera handles
+            await new Promise(resolve => setTimeout(resolve, 500))
+            
+            // More aggressive cleanup after cancellation
+            await stopAllCameraTracks(false) // Use full cleanup for cancelled sessions
+            
+            // Wait additional time for camera hardware to fully release
+            await new Promise(resolve => setTimeout(resolve, 300))
           }
           setPhilsysError(errorMsg)
           setIsPhilsysTesting(false)
@@ -1107,72 +1677,163 @@ export default function ValidationPage() {
         })
         .finally(async () => {
           // Always stop camera tracks when retry completes
-          await stopAllCameraTracks()
+          // Skip fresh stream creation since SDK might still be using camera
+          // SDK will handle its own cleanup
+          await stopAllCameraTracks(true)
           runningRef.current = false
         })
       }
-
-      // Handle the SDK promise
-      sdkPromise.then((data) => {
-        // Prefer provider message if present
-        if (data?.status === 'error' || data?.result?.error) {
-          const sdkMsg = data?.result?.message || data?.message || 'Face liveness failed'
+    
+    // Handle the SDK promise
+    sdkPromise.then((data: any) => {
+      // Prefer provider message if present
+      if (data?.status === 'error' || data?.result?.error) {
+        const sdkMsg = data?.result?.message || data?.message || 'Face liveness failed'
           setPhilsysResponse(data)
-          setPhilsysError(sdkMsg)
+        setPhilsysError(sdkMsg)
           setIsPhilsysTesting(false)
           setShowSDKWarning(false)
-          return
-        }
+        return
+      }
 
-        const sessionId = data?.result?.session_id
-        if (!sessionId) {
-          const errorMsg = data?.result?.message || data?.message || 'Face liveness session ID not returned.'
-          setPhilsysResponse(data)
-          setPhilsysError(errorMsg)
-          setIsPhilsysTesting(false)
-          setShowSDKWarning(false)
-          return
-        }
-
+      const sessionId = data?.result?.session_id
+      if (!sessionId) {
+        const errorMsg = data?.result?.message || data?.message || 'Face liveness session ID not returned.'
         setPhilsysResponse(data)
+        setPhilsysError(errorMsg)
         setIsPhilsysTesting(false)
         setShowSDKWarning(false)
-      }).catch((error: any) => {
-        console.error('SDK execution error:', error)
-        
-        let errorMsg = error?.message || 'Face liveness check failed'
-        const errName = (error as any)?.name || ''
-        
-        // Check for parsing errors in error message
-        if (errorMsg.includes('parse') || errorMsg.includes('JSON') || errorMsg.includes('Unable to parse')) {
-          errorMsg = 'Face liveness session may have exited unexpectedly. Please try again.'
-        } else if (errName === 'NotAllowedError') {
-          errorMsg = 'Camera permission denied. Please allow camera access and try again.'
-        } else if (errName === 'NotFoundError') {
-          errorMsg = 'No camera device found.'
-        } else if (errName === 'SecurityError') {
-          errorMsg = 'Camera blocked due to insecure context. Use HTTPS or localhost.'
+        return
+      }
+
+      setPhilsysResponse(data)
+      setIsPhilsysTesting(false)
+      setShowSDKWarning(false)
+    }).catch(async (error: any) => {
+      console.error('SDK execution error:', error)
+      
+          let errorMsg = error?.message || 'Face liveness check failed'
+      const errName = (error as any)?.name || ''
+      
+        // Check for parsing errors in error message - often indicates camera not ready
+      if (errorMsg.includes('parse') || errorMsg.includes('JSON') || errorMsg.includes('Unable to parse')) {
+          errorMsg = 'Camera may not be ready. Please wait a moment and try again, or ensure no other application is using the camera.'
+      } else if (errName === 'NotAllowedError') {
+        errorMsg = 'Camera permission denied. Please allow camera access and try again.'
+      } else if (errName === 'NotFoundError') {
+        errorMsg = 'No camera device found.'
+      } else if (errName === 'SecurityError') {
+        errorMsg = 'Camera blocked due to insecure context. Use HTTPS or localhost.'
         } else if (errName === 'NotReadableError') {
           // Retry once with a full SDK reload which can clear previous camera handles
           tryReloadAndRetry('Camera is in use by another application. Close it and try again.')
           return
-        } else if (errorMsg.includes('exited') || errorMsg.includes('session')) {
-          errorMsg = `Face liveness session ended: ${errorMsg}`
+      } else if (errorMsg.includes('exited') || errorMsg.includes('session')) {
+        // User cancelled or session ended - need aggressive cleanup
+        errorMsg = `Face liveness session ended: ${errorMsg}`
+        
+        // If cancelled, ensure SDK instance is properly stopped
+        if (sdkInstanceRef && typeof sdkInstanceRef.stop === 'function') {
+          try {
+            sdkInstanceRef.stop()
+          } catch { void 0 }
         }
         
-        setPhilsysError(errorMsg)
-        setIsPhilsysTesting(false)
-        setShowSDKWarning(false)
+        // Wait for SDK to fully release camera handles
+        await new Promise(resolve => setTimeout(resolve, 500))
+        
+        // More aggressive cleanup after cancellation
+        await stopAllCameraTracks(false) // Use full cleanup for cancelled sessions
+        
+        // Wait additional time for camera hardware to fully release
+        await new Promise(resolve => setTimeout(resolve, 300))
+        
+        // Clear SDK instance reference
+        sdkInstanceRef = null
+      }
+          
+      setPhilsysError(errorMsg)
+      setIsPhilsysTesting(false)
+      setShowSDKWarning(false)
       }).finally(async () => {
         // Always stop camera tracks when SDK completes (success, error, or cancel)
-        await stopAllCameraTracks()
+        // Skip fresh stream creation - SDK handles its own camera cleanup
+        // We just need to ensure any lingering tracks are released
+        await stopAllCameraTracks(true)
+        
+        // Clear SDK instance reference
+        sdkInstanceRef = null
         runningRef.current = false
       })
     }
 
-    preflight().then(startSDK).catch(() => {
-      // preflight already set error and reset flag
-    })
+    // For regular mode: Ensure proper cleanup before starting new session
+    // Wrap in async IIFE since handlePhilsysLivenessCheck is not async
+    ;(async () => {
+      cleanupRef.current = true
+      
+      try {
+        // First, ensure any previous SDK instance is fully stopped
+        // Check if there's a lingering SDK instance in window
+        let previousInstance: any = null
+        try {
+          // Try to get a fresh instance to check if SDK is loaded
+          if (window.IDmetaPhilsysLiveness) {
+            previousInstance = window.IDmetaPhilsysLiveness()
+            // If there's a stop method, call it to ensure cleanup
+            if (previousInstance && typeof previousInstance.stop === 'function') {
+              try {
+                previousInstance.stop()
+                console.log('Stopped previous SDK instance')
+              } catch { void 0 }
+            }
+          }
+        } catch { void 0 }
+        
+        // Wait for any previous cleanup to complete
+        await new Promise(resolve => setTimeout(resolve, 800))
+        
+        // Stop any lingering camera tracks from video elements
+        const videoElements = document.querySelectorAll('video')
+        videoElements.forEach(video => {
+          if (video.srcObject instanceof MediaStream) {
+            video.srcObject.getTracks().forEach(track => {
+              if (track.kind === 'video' && track.readyState !== 'ended') {
+                try {
+                  track.stop()
+                  console.log('Stopped lingering camera track:', track.id)
+                } catch { void 0 }
+              }
+            })
+          }
+        })
+        
+        // Wait a bit more for browser to fully release camera
+        await new Promise(resolve => setTimeout(resolve, 500))
+        
+        // Now reload SDK to get fresh state
+        await reloadIdmetaSDK()
+        
+        // Additional delay after SDK reload to ensure it's fully initialized
+        await new Promise(resolve => setTimeout(resolve, 300))
+      } finally {
+        cleanupRef.current = false
+      }
+      
+      // Verify SDK is loaded
+      if (!window.IDmetaPhilsysLiveness) {
+        setPhilsysError('SDK failed to load. Please refresh the page and try again.')
+        setIsPhilsysTesting(false)
+        runningRef.current = false
+        return
+      }
+
+      // Start SDK - let it handle camera access directly
+      startSDK()
+        .catch(() => {
+          // SDK start will handle errors
+        })
+    })()
   }
 
   // Submit to PH PhilSys (PCN)
@@ -1234,6 +1895,10 @@ export default function ValidationPage() {
     if (!status) return null
     const normalizedStatus = status.toLowerCase()
     
+    // Check for verified first (should be green)
+    if (normalizedStatus.includes('verified') || normalizedStatus === 'verified') {
+      return <Badge variant="verified">Verified</Badge>
+    }
     if (normalizedStatus.includes('approved') || normalizedStatus === 'approved') {
       return <Badge variant={status as any}>Approved</Badge>
     }
@@ -1318,139 +1983,93 @@ export default function ValidationPage() {
         </div>
       </div>
 
-      {/* API Response */}
-      {apiResponse && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center justify-between">
-              <span>Initialize Verification API Response</span>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => copyToClipboard(JSON.stringify(apiResponse, null, 2))}
-                icon={<Copy className="h-4 w-4" />}
-              >
-                Copy JSON
-              </Button>
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-4">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">
-                    Internal Verification ID
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <p className="text-sm font-mono text-gray-900 dark:text-gray-100">
-                      {apiResponse.verificationId || apiResponse.verification_id || 'N/A'}
-                    </p>
-                  {(apiResponse.verificationId || apiResponse.verification_id) && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() =>
-                        copyToClipboard(apiResponse.verificationId || apiResponse.verification_id || '')
-                      }
-                      icon={<Copy className="h-3 w-3" />}
-                    >{''}</Button>
-                  )}
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">
-                    External Verification ID (IDmeta)
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <p className="text-sm font-mono text-gray-900 dark:text-gray-100">
-                      {apiResponse.external_verification_id || verification?.external_verification_id || verificationData?.external_verification_id || 'N/A'}
-                    </p>
-                  {(apiResponse.external_verification_id || verification?.external_verification_id || verificationData?.external_verification_id) && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() =>
-                        copyToClipboard(apiResponse.external_verification_id || verification?.external_verification_id || verificationData?.external_verification_id || '')
-                      }
-                      icon={<Copy className="h-3 w-3" />}
-                    >{''}</Button>
-                  )}
-                  </div>
-                  <p className="text-xs text-green-600 dark:text-green-400 mt-1">
-                    ✅ Used for all verification endpoints
-                  </p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">
-                    Status
-                  </label>
-                  {getStatusBadge(verification?.status || apiResponse.status)}
-                </div>
-                {apiResponse.sessionUrl || apiResponse.session_url ? (
-                  <div className="md:col-span-2">
-                    <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">
-                      Session URL
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-mono text-gray-900 dark:text-gray-100 break-all flex-1">
-                        {apiResponse.sessionUrl || apiResponse.session_url}
-                      </p>
-                      <Button
-                        size="sm"
-                        variant="primary"
-                        onClick={() =>
-                          window.open(apiResponse.sessionUrl || apiResponse.session_url, '_blank')
-                        }
-                      >
-                        Open Session
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() =>
-                          copyToClipboard(apiResponse.sessionUrl || apiResponse.session_url || '')
-                        }
-                        icon={<Copy className="h-3 w-3" />}
-                      >{''}</Button>
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-
-              {/* Full JSON Response */}
-              <div>
-                <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">
-                  Full Response JSON
-                </label>
-                <pre className="bg-gray-50 dark:bg-gray-800 p-4 rounded-lg overflow-auto text-xs font-mono">
-                  {JSON.stringify(apiResponse, null, 2)}
-                </pre>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-
       {/* Current Verification Status */}
-      {verification && (
+      {(verification || verificationData) && (
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center justify-between">
               <span>Current Verification Status</span>
-              {(verification as any)?.metadata?.request_type === 'philsys_pcn' && (
-                <span className="inline-flex items-center rounded-md bg-blue-50 dark:bg-blue-900/20 px-2 py-1 text-xs font-medium text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
-                  PH PhilSys PCN
-                </span>
-              )}
+              <div className="flex items-center gap-2">
+                {/* Manual Finalize Button */}
+                {(() => {
+                  const providerName = verificationData?.provider && typeof verificationData.provider === 'object' 
+                    ? (verificationData.provider as any).name 
+                    : null
+                  const isIdmeta = providerName === 'IDMeta' || verificationData?.external_verification_id
+                  const isFinalized = finalizeResponse?.finalized || (verificationData as any)?.finalized
+                  
+                  if (isIdmeta && !isFinalized) {
+                    return (
+              <Button
+                size="sm"
+                        variant="secondary"
+                        onClick={handleManualFinalizeVerification}
+                        disabled={isManualFinalizing || isFinalizing}
+                      >
+                        {isManualFinalizing ? 'Finalizing...' : 'Manual Finalize'}
+              </Button>
+                    )
+                  }
+                  return null
+                })()}
+                {(verification as any)?.metadata?.request_type === 'philsys_pcn' && (
+                  <span className="inline-flex items-center rounded-md bg-blue-50 dark:bg-blue-900/20 px-2 py-1 text-xs font-medium text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
+                    PH PhilSys PCN
+                  </span>
+                )}
+              </div>
             </CardTitle>
           </CardHeader>
           <CardContent>
+            {(() => {
+              // Show finalized notice if verification is finalized (from response or verificationData)
+              const isFinalized = finalizeResponse?.finalized || (verificationData as any)?.finalized
+              if (!isFinalized) return null
+
+              const status = finalizeResponse?.status || getVerificationStatus
+              return (
+                <div className={`mb-4 p-3 rounded-lg ${
+                  status === 'approved' 
+                    ? 'bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-800' 
+                    : status === 'rejected'
+                    ? 'bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800'
+                    : 'bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800'
+                }`}>
+                  <div className="flex items-center justify-between">
+                <div>
+                      <p className={`text-sm font-medium ${
+                        status === 'approved'
+                          ? 'text-green-800 dark:text-green-200'
+                          : status === 'rejected'
+                          ? 'text-red-800 dark:text-red-200'
+                          : 'text-yellow-800 dark:text-yellow-200'
+                      }`}>
+                        ✅ Verification Finalized
+                      </p>
+                      <p className="text-xs mt-1 text-gray-600 dark:text-gray-400">
+                        Status: {finalizeResponse?.statusMessage || status}
+                      </p>
+                      {finalizeResponse?.missingPlans && finalizeResponse.missingPlans.length > 0 && (
+                        <p className="text-xs mt-1 text-yellow-700 dark:text-yellow-300">
+                          Missing Plans: {finalizeResponse.missingPlans.join(', ')}
+                        </p>
+                  )}
+                  </div>
+                </div>
+                </div>
+              )
+            })()}
+            {finalizeError && (
+              <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+                <p className="text-sm text-red-700 dark:text-red-300">{finalizeError}</p>
+                    </div>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div>
                 <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">
                   Status
                 </label>
-                {getStatusBadge(verification.status)}
+                {getStatusBadge(getVerificationStatus)}
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">
@@ -1460,20 +2079,20 @@ export default function ValidationPage() {
                   {templateName}
                 </p>
               </div>
-              {(verification.external_verification_id || verificationData?.external_verification_id) && (
+              {((verification?.external_verification_id) || verificationData?.external_verification_id) && (
                 <div className="md:col-span-2">
                   <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">
                     External Verification ID (IDmeta)
                   </label>
                   <div className="flex items-center gap-2">
                     <p className="text-sm font-mono text-gray-900 dark:text-gray-100">
-                      {verification.external_verification_id || verificationData?.external_verification_id}
+                      {verification?.external_verification_id || verificationData?.external_verification_id}
                     </p>
                     <Button
                       size="sm"
                       variant="ghost"
                       onClick={() =>
-                        copyToClipboard(verification.external_verification_id || verificationData?.external_verification_id || '')
+                        copyToClipboard(verification?.external_verification_id || verificationData?.external_verification_id || '')
                       }
                       icon={<Copy className="h-3 w-3" />}
                     >{''}</Button>
@@ -1484,48 +2103,48 @@ export default function ValidationPage() {
                 </div>
               )}
               {/* Flow metadata */}
-              {(verification as any)?.metadata && (
+              {((verification as any)?.metadata || verificationData?.metadata) && (
                 <div>
                   <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">
                     Flow
                   </label>
                   <div className="text-sm text-gray-900 dark:text-gray-100 space-x-2">
-                    {(verification as any)?.metadata?.country && (
+                    {((verification as any)?.metadata?.country || (verificationData as any)?.metadata?.country) && (
                       <span className="inline-flex items-center rounded-md bg-gray-100 dark:bg-gray-800 px-2 py-0.5 text-xs">
-                        {(verification as any).metadata.country}
+                        {(verification as any)?.metadata?.country || (verificationData as any)?.metadata?.country}
                       </span>
                     )}
-                    {(verification as any)?.metadata?.flow && (
+                    {((verification as any)?.metadata?.flow || (verificationData as any)?.metadata?.flow) && (
                       <span className="inline-flex items-center rounded-md bg-gray-100 dark:bg-gray-800 px-2 py-0.5 text-xs">
-                        {(verification as any).metadata.flow}
+                        {(verification as any)?.metadata?.flow || (verificationData as any)?.metadata?.flow}
                       </span>
                     )}
-                    {(verification as any)?.metadata?.input_type && (
+                    {((verification as any)?.metadata?.input_type || (verificationData as any)?.metadata?.input_type) && (
                       <span className="inline-flex items-center rounded-md bg-gray-100 dark:bg-gray-800 px-2 py-0.5 text-xs">
-                        {(verification as any).metadata.input_type}
+                        {(verification as any)?.metadata?.input_type || (verificationData as any)?.metadata?.input_type}
                       </span>
                     )}
                   </div>
                 </div>
               )}
 
-              {verification.createdAt || verification.created_at ? (
+              {(verification?.createdAt || verification?.created_at || verificationData?.createdAt || verificationData?.created_at) ? (
                 <div>
                   <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">
                     Created At
                   </label>
                   <p className="text-sm text-gray-900 dark:text-gray-100">
-                    {formatDate(verification.createdAt || verification.created_at)}
+                    {formatDate(verification?.createdAt || verification?.created_at || verificationData?.createdAt || verificationData?.created_at || '')}
                   </p>
                 </div>
               ) : null}
-              {verification.updatedAt || verification.updated_at ? (
+              {(verification?.updatedAt || verification?.updated_at || verificationData?.updatedAt || verificationData?.updated_at) ? (
                 <div>
                   <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">
                     Last Updated
                   </label>
                   <p className="text-sm text-gray-900 dark:text-gray-100">
-                    {formatDate(verification.updatedAt || verification.updated_at)}
+                    {formatDate(verification?.updatedAt || verification?.updated_at || verificationData?.updatedAt || verificationData?.updated_at || '')}
                   </p>
                 </div>
               ) : null}
@@ -1545,13 +2164,13 @@ export default function ValidationPage() {
             </div>
 
             {/* Verification Result (if available) */}
-            {verification.result && (
+            {(verification?.result || verificationData?.result) && (
               <div className="mt-6">
                 <label className="block text-sm font-medium text-gray-500 dark:text-gray-400 mb-2">
                   Verification Result
                 </label>
                 <pre className="bg-gray-50 dark:bg-gray-800 p-4 rounded-lg overflow-auto text-xs font-mono">
-                  {JSON.stringify(verification.result, null, 2)}
+                  {JSON.stringify(verification?.result || verificationData?.result, null, 2)}
                 </pre>
               </div>
             )}
@@ -1910,9 +2529,29 @@ export default function ValidationPage() {
       {showBiometricsVerification && (
       <Card>
         <CardHeader>
-          <CardTitle>Biometrics Verification</CardTitle>
+          <CardTitle className="flex items-center justify-between">
+            <span>Biometrics Verification</span>
+            {(() => {
+              const step = verificationData?.verificationSteps?.biometric_verification || verificationData?.metadata?.verification_steps?.biometric_verification
+              if (step?.completedAt) {
+                return (
+                  <Badge variant="approved" className="text-xs">
+                    ✅ Completed {step.probability !== undefined ? `(${(step.probability * 100).toFixed(1)}% confidence)` : ''}
+                  </Badge>
+                )
+              }
+              return null
+            })()}
+          </CardTitle>
         </CardHeader>
         <CardContent>
+          {isBiometricsVerificationDisabled && (
+            <div className="mb-4 p-3 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-lg">
+              <p className="text-sm text-yellow-800 dark:text-yellow-200">
+                ⚠️ Please complete <strong>Biometrics Face Match</strong> first before using Biometrics Verification.
+              </p>
+            </div>
+          )}
           <div className="space-y-6">
             {/* Biometric Verification Section */}
             <div className="space-y-4">
@@ -1924,6 +2563,7 @@ export default function ValidationPage() {
                 <input
                   type="file"
                   accept="image/jpeg,image/png"
+                  disabled={isBiometricsVerificationDisabled}
                   onChange={async (e) => {
                     const file = e.target.files?.[0]
                     if (!file) return
@@ -1936,7 +2576,7 @@ export default function ValidationPage() {
                     setBiometricVerificationImageUrl(dataUrl)
                     setBiometricError(null)
                   }}
-                  className="block w-full text-sm text-gray-900 dark:text-gray-100 file:mr-4 file:py-2 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 dark:file:bg-blue-900/30 dark:file:text-blue-300"
+                  className="block w-full text-sm text-gray-900 dark:text-gray-100 file:mr-4 file:py-2 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 dark:file:bg-blue-900/30 dark:file:text-blue-300 disabled:opacity-50 disabled:cursor-not-allowed"
                 />
                 {biometricVerificationImageUrl && (
                   <img src={biometricVerificationImageUrl} alt="Biometric preview" className="mt-2 h-32 rounded border border-gray-200 dark:border-gray-700 object-cover" />
@@ -1945,7 +2585,7 @@ export default function ValidationPage() {
               <Button
                 variant="primary"
                 onClick={handleBiometricVerification}
-                disabled={isSubmittingBiometric || !biometricVerificationImageUrl}
+                disabled={isSubmittingBiometric || !biometricVerificationImageUrl || isBiometricsVerificationDisabled}
               >
                 {isSubmittingBiometric ? 'Verifying...' : 'Verify Biometrics'}
               </Button>
@@ -1972,7 +2612,8 @@ export default function ValidationPage() {
                   value={biometricUsername}
                   onChange={(e) => setBiometricUsername(e.target.value)}
                   placeholder="e.g., john.doe@example.com or John Doe"
-                  className="w-full px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  disabled={isBiometricsVerificationDisabled}
+                  className="w-full px-3 py-2 rounded-md border border-gray-300 dark:border-gray-600 bg-white dark:bg-gray-800 text-sm text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
                 />
               </div>
               <div>
@@ -1982,6 +2623,7 @@ export default function ValidationPage() {
                 <input
                   type="file"
                   accept="image/jpeg,image/png"
+                  disabled={isBiometricsVerificationDisabled}
                   onChange={async (e) => {
                     const file = e.target.files?.[0]
                     if (!file) return
@@ -1994,7 +2636,7 @@ export default function ValidationPage() {
                     setBiometricRegistrationImageUrl(dataUrl)
                     setBiometricError(null)
                   }}
-                  className="block w-full text-sm text-gray-900 dark:text-gray-100 file:mr-4 file:py-2 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 dark:file:bg-blue-900/30 dark:file:text-blue-300"
+                  className="block w-full text-sm text-gray-900 dark:text-gray-100 file:mr-4 file:py-2 file:px-3 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 dark:file:bg-blue-900/30 dark:file:text-blue-300 disabled:opacity-50 disabled:cursor-not-allowed"
                 />
                 {biometricRegistrationImageUrl && (
                   <img src={biometricRegistrationImageUrl} alt="Registration preview" className="mt-2 h-32 rounded border border-gray-200 dark:border-gray-700 object-cover" />
@@ -2003,7 +2645,7 @@ export default function ValidationPage() {
               <Button
                 variant="primary"
                 onClick={handleBiometricRegistration}
-                disabled={isSubmittingBiometric || !biometricRegistrationImageUrl || !biometricUsername.trim()}
+                disabled={isSubmittingBiometric || !biometricRegistrationImageUrl || !biometricUsername.trim() || isBiometricsVerificationDisabled}
               >
                 {isSubmittingBiometric ? 'Registering...' : 'Register Biometrics'}
               </Button>
@@ -2029,7 +2671,20 @@ export default function ValidationPage() {
       {showBiometricsFaceCompare && (
       <Card>
         <CardHeader>
-          <CardTitle>Biometrics Face Match</CardTitle>
+          <CardTitle className="flex items-center justify-between">
+            <span>Biometrics Face Match</span>
+            {(() => {
+              const step = verificationData?.verificationSteps?.biometrics_face_match || verificationData?.metadata?.verification_steps?.biometrics_face_match
+              if (step?.completedAt) {
+                return (
+                  <Badge variant="approved" className="text-xs">
+                    ✅ Completed {step.score !== undefined ? `(Score: ${step.score}%)` : ''}
+                  </Badge>
+                )
+              }
+              return null
+            })()}
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <div className="space-y-4">

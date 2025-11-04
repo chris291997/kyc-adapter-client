@@ -17,6 +17,7 @@ import TenantDashboard from './pages/tenant/TenantDashboard'
 import TenantValidationPage from './pages/tenant/ValidationPage'
 import VerificationsList from './pages/tenant/VerificationsList'
 import AccountsList from './pages/tenant/AccountsList'
+import AccountDetails from './pages/tenant/AccountDetails'
 import ApiKeysPage from './pages/tenant/ApiKeysPage'
 import NotFoundPage from './pages/NotFoundPage'
 import UnauthorizedPage from './pages/UnauthorizedPage'
@@ -97,6 +98,7 @@ function App() {
           <Route path="validation/:verificationId" element={<TenantValidationPage />} />
           <Route path="verifications" element={<VerificationsList />} />
           <Route path="accounts" element={<AccountsList />} />
+          <Route path="accounts/:accountId" element={<AccountDetails />} />
           <Route path="api-keys" element={<ApiKeysPage />} />
         </Route>
 

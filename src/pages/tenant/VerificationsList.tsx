@@ -11,7 +11,7 @@ import LoadingSpinner from '../../components/ui/LoadingSpinner'
 import EmptyState from '../../components/ui/EmptyState'
 import Modal, { ModalActions } from '../../components/ui/Modal'
 import Input from '../../components/ui/Input'
-import { Plus, CheckCircle, ExternalLink, Eye } from 'lucide-react'
+import { Plus, CheckCircle, ExternalLink, Eye, RefreshCw } from 'lucide-react'
 import { formatDate, capitalize } from '../../utils/format'
 import { websocketService } from '../../services/websocketService'
 import { WS_EVENTS } from '../../constants'
@@ -32,9 +32,12 @@ export default function VerificationsList() {
     },
   })
 
-  const { data, isLoading, error, refetch } = useQuery<PaginatedResponse<Verification>>({
+  const { data, isLoading, error, refetch, isRefetching } = useQuery<PaginatedResponse<Verification>>({
     queryKey: ['tenant-verifications', page, limit],
     queryFn: () => apiClient.get<PaginatedResponse<Verification>>(`${API_ENDPOINTS.TENANT_VERIFICATIONS}?page=${page}&limit=${limit}`),
+    refetchOnMount: false, // Use cached data when navigating back, don't refetch if data exists
+    refetchOnWindowFocus: false, // Don't refetch on window focus
+    staleTime: 2 * 60 * 1000, // Consider data fresh for 2 minutes (cached data from websocket refetch is valid)
   })
 
   useEffect(() => {
@@ -213,9 +216,39 @@ export default function VerificationsList() {
                         : (verification.provider as any)?.name || 'N/A'}
                     </TableCell>
                     <TableCell>
-                      <Badge variant={verification.status as any}>
-                        {verification.status}
-                      </Badge>
+                      {(() => {
+                        // Extract status from provider_response.fullResponse.status if available
+                        const prov = (verification as any)?.provider_response
+                        const statusFromProvider = prov?.fullResponse?.status
+                        let displayStatus = verification.status
+                        const isFinalized = (verification as any)?.finalized
+                        
+                        if (statusFromProvider !== undefined && statusFromProvider !== null) {
+                          // Convert boolean status to string if needed
+                          if (typeof statusFromProvider === 'boolean') {
+                            displayStatus = statusFromProvider ? 'approved' : 'rejected'
+                          } else {
+                            const statusStr = String(statusFromProvider)
+                            // Only use if it's a valid VerificationStatus
+                            if (['pending', 'processing', 'approved', 'rejected', 'expired', 'needs_review'].includes(statusStr.toLowerCase())) {
+                              displayStatus = statusStr.toLowerCase() as any
+                            }
+                          }
+                        }
+                        
+                        return (
+                          <div className="flex items-center gap-2">
+                            <Badge variant={displayStatus as any}>
+                              {displayStatus}
+                            </Badge>
+                            {isFinalized && (
+                              <span className="text-xs text-green-600 dark:text-green-400" title="Verification Finalized">
+                                ✅
+                              </span>
+                            )}
+                          </div>
+                        )
+                      })()}
                     </TableCell>
                     <TableCell>
                       {formatDate(verification.createdAt || verification.created_at)}
@@ -262,6 +295,16 @@ export default function VerificationsList() {
                   )}
                 </p>
                 <div className="flex items-center gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => refetch()}
+                    disabled={isRefetching}
+                    icon={<RefreshCw className={`h-4 w-4 ${isRefetching ? 'animate-spin' : ''}`} />}
+                    title="Refresh list"
+                  >
+                    {isRefetching ? 'Refreshing...' : 'Refresh'}
+                  </Button>
                   {pagination && (
                     <>
                       <Button

@@ -717,14 +717,6 @@ export default function ValidationPage() {
       const statusFromProvider = prov?.fullResponse?.status
       const statusMessage = prov?.status_message
       
-      console.log('[ValidationPage] Verification already finalized or has final status, skipping finalize request', {
-        isAlreadyFinalized,
-        hasFinalStatus,
-        currentStatus,
-        statusFromProvider,
-        statusMessage,
-        verificationDataStatus: verificationData?.status
-      })
       // Still show the finalized notice if we have data
       if (verificationData) {
         const prov = (verificationData as any)?.provider_response
@@ -802,14 +794,6 @@ export default function ValidationPage() {
       const statusFromProvider = prov?.fullResponse?.status
       const statusMessage = prov?.status_message
       
-      console.log('[ValidationPage] Verification already finalized or has final status, skipping manual finalize request', {
-        isAlreadyFinalized,
-        hasFinalStatus,
-        currentStatus,
-        statusFromProvider,
-        statusMessage,
-        verificationDataStatus: verificationData?.status
-      })
       // Still show the finalized notice if we have data
       if (verificationData) {
         const prov = (verificationData as any)?.provider_response
@@ -914,7 +898,6 @@ export default function ValidationPage() {
 
     // If we have cards from verification_types, use those
     if (cardsFromTypes.size > 0) {
-      console.log('[ValidationPage] Allowed cards from verification_types:', Array.from(cardsFromTypes), 'types:', verificationTypes)
       return cardsFromTypes
     }
 
@@ -931,8 +914,7 @@ export default function ValidationPage() {
           const arr = JSON.parse(drop)
           if (Array.isArray(arr)) return arr.map((x) => Number(x))
         } catch {
-          // ignore invalid JSON in dropzone_plans
-          console.log('Not importing dropzone_plans');
+          // Invalid JSON in dropzone_plans, skip
         }
       }
       return []
@@ -944,13 +926,7 @@ export default function ValidationPage() {
       ? planIdsFromResponse
       : templatePlans
 
-    // Debug logging
-    if (planIds.length === 0 && templatePlans.length > 0) {
-      console.log('[ValidationPage] No cards found for template:', selectedTemplateId, 'plans:', templatePlans)
-    }
-
     const cards = planIds.flatMap((pid) => PLAN_ID_TO_CARDS[pid] || [])
-    console.log('[ValidationPage] Allowed cards:', Array.from(cards), 'from planIds:', planIds, 'templateId:', selectedTemplateId)
     return new Set(cards)
   }, [verificationData, selectedTemplateId])
 
@@ -1241,14 +1217,6 @@ export default function ValidationPage() {
     const images = verificationData.images || {}
     const steps = verificationData.verificationSteps || verificationData.metadata?.verification_steps || {}
 
-    console.log('[ValidationPage] Loading images from verification data:', {
-      verificationId,
-      hasImages: !!verificationData.images,
-      hasSteps: !!steps,
-      hasMetadataSteps: !!verificationData.metadata?.verification_steps,
-      stepsKeys: Object.keys(steps),
-      apiBaseUrl: API_BASE_URL
-    })
 
     // Load Biometrics Face Match images
     const faceMatchStep = steps.biometrics_face_match || images.biometrics_face_match
@@ -1257,12 +1225,6 @@ export default function ValidationPage() {
       const img2RelativeUrl = faceMatchStep.images.image2?.url
       const img1Url = getImageUrl(img1RelativeUrl)
       const img2Url = getImageUrl(img2RelativeUrl)
-      console.log('[ValidationPage] Face Match images:', {
-        img1Relative: img1RelativeUrl,
-        img1Full: img1Url,
-        img2Relative: img2RelativeUrl,
-        img2Full: img2Url
-      })
       if (img1Url) setFaceMatchImage1Url(img1Url)
       if (img2Url) setFaceMatchImage2Url(img2Url)
     }
@@ -1321,14 +1283,6 @@ export default function ValidationPage() {
       const statusFromProvider = prov?.fullResponse?.status
       const statusMessage = prov?.status_message
       
-      console.log('[ValidationPage] Verification already finalized or has final status, skipping auto-finalize check', {
-        isFinalized,
-        hasFinalStatus,
-        currentStatus,
-        statusFromProvider,
-        statusMessage,
-        verificationDataStatus: verificationData.status
-      })
       return
     }
 
@@ -1359,13 +1313,6 @@ export default function ValidationPage() {
     
     // Auto-finalize if all steps are completed
     if (allStepsCompleted) {
-      console.log('[ValidationPage] All verification steps completed, auto-finalizing...', {
-        expectedSteps,
-        steps: Object.keys(steps),
-        allCompleted: allStepsCompleted,
-        currentStatus,
-        isFinalized
-      })
       // Use the handler function
       handleFinalizeVerification()
     }
@@ -1457,7 +1404,6 @@ export default function ValidationPage() {
     
     // Prevent starting if already running or cleanup is in progress
     if (runningRef.current || cleanupRef.current) {
-      console.log('SDK already running or cleanup in progress, skipping...')
       return
     }
     
@@ -1521,16 +1467,15 @@ export default function ValidationPage() {
                   if (track.kind === 'video') {
                     try {
                       track.stop()
-                      console.log('Cleanup: Stopped camera track:', track.id)
                     } catch (e) {
-                      console.log('Cleanup: Error stopping track:', e)
+                      // Track already stopped or inaccessible
                     }
                   }
                 })
               }
             })
           } catch (e) {
-            console.log('Cleanup: Could not access video elements:', e)
+            // Could not access video elements
           }
         }
       } catch { void 0 }
@@ -1784,7 +1729,6 @@ export default function ValidationPage() {
             if (previousInstance && typeof previousInstance.stop === 'function') {
               try {
                 previousInstance.stop()
-                console.log('Stopped previous SDK instance')
               } catch { void 0 }
             }
           }
@@ -1801,7 +1745,6 @@ export default function ValidationPage() {
               if (track.kind === 'video' && track.readyState !== 'ended') {
                 try {
                   track.stop()
-                  console.log('Stopped lingering camera track:', track.id)
                 } catch { void 0 }
               }
             })

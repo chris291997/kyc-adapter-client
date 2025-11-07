@@ -84,14 +84,11 @@ export default function VerificationsList() {
       // Subscribe to WebSocket updates for this verification
       const verificationId = response.verificationId || response.verification_id
       if (verificationId) {
-        console.log(`🔔 Subscribing to verification: ${verificationId}`)
         websocketService.subscribeToVerification(verificationId, (data) => {
-          console.log(`📨 Verification update received for ${verificationId}:`, data)
           // Invalidate cache when WebSocket update is received
           queryClient.invalidateQueries({ queryKey: ['tenant-verifications'], exact: false })
           refetch()
         })
-        console.log(`✅ Successfully subscribed to verification: ${verificationId}`)
 
         // Navigate to validation page to view the verification
         navigate(`/tenant/validation/${verificationId}`, {

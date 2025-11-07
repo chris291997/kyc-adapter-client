@@ -25,7 +25,6 @@ export default function ValidationPage() {
     if (!verificationId) return
 
     const unsubscribe = websocketService.subscribeToVerification(verificationId, (data) => {
-      console.log('Verification update received:', data)
       const status = data.status || ''
       setVerificationStatus(status)
       

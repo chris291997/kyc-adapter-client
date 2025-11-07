@@ -150,7 +150,6 @@ export default function TenantDetails() {
   const updateTenantMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: any }) => {
       // Try both PATCH and PUT to match backend requirements
-      console.log('Updating tenant:', id, data)
       return apiClient.put<Tenant>(`${API_ENDPOINTS.ADMIN_TENANTS}/${id}`, data)
     },
     onSuccess: () => {

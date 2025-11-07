@@ -10,6 +10,7 @@
   # These files contain references to env vars but not actual secret values
   # Note: These can also be set in Netlify Dashboard under Site settings > Environment variables
   [build.environment]
+    NODE_VERSION = "20"
     SECRETS_SCAN_OMIT_PATHS = "*.md,package.json,package-lock.json,dist/**,src/**/*.ts,src/**/*.tsx,vite.config.ts,public/**/*.html"
     SECRETS_SCAN_OMIT_KEYS = "VITE_ENV,VITE_API_URL,VITE_WS_URL,VITE_API_KEYS_ONLY"
 

@@ -55,8 +55,6 @@ export default function TenantManagement() {
         }
         
         const result = await apiClient.get<PaginatedResponse<Tenant>>(`${API_ENDPOINTS.ADMIN_TENANTS}?${params}`)
-        console.log('Tenants API call:', `${API_ENDPOINTS.ADMIN_TENANTS}?${params}`)
-        console.log('Tenants data:', result)
         return result
       } catch (err) {
         console.error('Tenants fetch error:', err)
@@ -214,8 +212,6 @@ export default function TenantManagement() {
     total: data.total || tenants.length,
     totalPages: data.totalPages || Math.ceil((data.total || tenants.length) / (data.limit || 10))
   } : null
-
-  console.log('Tenants:', tenants)
 
   return (
     <div className="space-y-6">

@@ -88,8 +88,6 @@ export default function UsersManagement() {
         }
         
         const result = await apiClient.get<PaginatedResponse<User>>(`${API_ENDPOINTS.ADMIN_USERS}?${params}`)
-        console.log('Users API call:', `${API_ENDPOINTS.ADMIN_USERS}?${params}`)
-        console.log('Users data:', result)
         return result
       } catch (err) {
         console.error('Users fetch error:', err)
@@ -224,9 +222,6 @@ export default function UsersManagement() {
     total: data.total || users.length,
     totalPages: data.totalPages || Math.ceil((data.total || users.length) / (data.limit || 10))
   } : null
-
-  console.log('Users:', users)
-  console.log('Sample user:', users[0])
 
   return (
     <div className="space-y-6">

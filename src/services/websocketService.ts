@@ -16,7 +16,6 @@ class WebSocketService {
    */
   connect(): void {
     if (this.socket?.connected) {
-      console.log('WebSocket already connected')
       return
     }
 
@@ -44,12 +43,10 @@ class WebSocketService {
     if (!this.socket) return
 
     this.socket.on(WS_EVENTS.CONNECT, () => {
-      console.log('WebSocket connected')
       this.reconnectAttempts = 0
     })
 
     this.socket.on(WS_EVENTS.DISCONNECT, (reason) => {
-      console.log('WebSocket disconnected:', reason)
       if (reason === 'io server disconnect') {
         // Server disconnected, try to reconnect
         this.socket?.connect()
@@ -193,7 +190,6 @@ class WebSocketService {
       if (handlers.length === 0) {
         this.handlers.delete(key)
         this.socket?.emit(WS_EVENTS.LEAVE_VERIFICATION, verificationId)
-        console.log(`Unsubscribed from verification: ${verificationId}`)
       }
     }
   }
@@ -205,7 +201,6 @@ class WebSocketService {
     const handlers = this.handlers.get(`tenant:${tenantId}`) || []
     if (handlers.length === 0) {
       this.socket?.emit(WS_EVENTS.JOIN_TENANT, tenantId)
-      console.log(`Subscribed to tenant: ${tenantId}`)
     }
     
     this.handlers.set(`tenant:${tenantId}`, [...handlers, handler])
@@ -222,7 +217,6 @@ class WebSocketService {
         if (tenantHandlers.length === 0) {
           this.handlers.delete(`tenant:${tenantId}`)
           this.socket?.emit(WS_EVENTS.LEAVE_TENANT, tenantId)
-          console.log(`Unsubscribed from tenant: ${tenantId}`)
         }
       }
     }
@@ -257,7 +251,6 @@ class WebSocketService {
       this.socket.disconnect()
       this.socket = null
       this.handlers.clear()
-      console.log('WebSocket disconnected')
     }
   }
 

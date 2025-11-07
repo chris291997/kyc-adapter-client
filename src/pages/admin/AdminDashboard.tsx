@@ -12,7 +12,6 @@ export default function AdminDashboard() {
     queryFn: async () => {
       try {
         const result = await apiClient.get<SuperAdminDashboardStats>(API_ENDPOINTS.ADMIN_DASHBOARD)
-        console.log('Dashboard data:', result)
         return result
       } catch (err) {
         console.error('Dashboard error:', err)
@@ -22,8 +21,6 @@ export default function AdminDashboard() {
     retry: 1,
     staleTime: 30000,
   })
-
-  console.log('Dashboard state:', { isLoading, error: error?.toString(), hasData: !!stats })
 
   if (isLoading) {
     return (
@@ -186,18 +183,6 @@ export default function AdminDashboard() {
           </div>
         </div>
       )}
-
-      {/* Debug Info - Remove after fixing */}
-      <div className="mt-8 p-4 bg-gray-100 dark:bg-gray-800 rounded-lg">
-        <details>
-          <summary className="cursor-pointer text-sm font-medium text-gray-700 dark:text-gray-300">
-            Debug: API Response Structure
-          </summary>
-          <pre className="mt-2 text-xs overflow-auto">
-            {JSON.stringify(stats, null, 2)}
-          </pre>
-        </details>
-      </div>
     </div>
   )
 }
